@@ -39,7 +39,14 @@ class GeminiService:
                 return
 
             genai.configure(api_key=Config.GEMINI_API_KEY)
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            # Try multiple model names (API changed model names)
+            try:
+                self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            except:
+                try:
+                    self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                except:
+                    self.model = genai.GenerativeModel('gemini-pro')
             self.available = True
             logger.info("✅ Gemini initialized successfully")
 

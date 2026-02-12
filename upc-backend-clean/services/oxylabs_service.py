@@ -73,9 +73,18 @@ class OxylabsService:
                 logger.warning("⚠️ Oxylabs returned no results")
                 return {'results': []}
 
-            # Extract parsed results
+            # Extract parsed results with validation
             parsed = data['results'][0].get('content', {})
-            organic = parsed.get('results', {}).get('organic', [])
+            if not isinstance(parsed, dict):
+                logger.error(f"❌ Unexpected 'content' type: {type(parsed)}")
+                return {'error': 'Invalid response format', 'results': []}
+
+            results_data = parsed.get('results', {})
+            if not isinstance(results_data, dict):
+                logger.error(f"❌ Unexpected 'results' type: {type(results_data)}")
+                return {'error': 'Invalid response format', 'results': []}
+
+            organic = results_data.get('organic', [])
 
             logger.info(f"✅ Oxylabs returned {len(organic)} results")
             return {'results': organic}
