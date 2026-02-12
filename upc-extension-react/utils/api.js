@@ -4,8 +4,7 @@
  */
 
 // Backend deployado en Railway
-// IMPORTANTE: Actualizar esta URL después del deployment en Railway
-const DEFAULT_BACKEND_URL = 'http://localhost:5000';  // Cambiar por tu URL de Railway
+const DEFAULT_BACKEND_URL = 'https://upc-backend-chatbotv2-production.up.railway.app';
 
 class DataBunkerAPI {
   constructor() {

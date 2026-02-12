@@ -7,8 +7,7 @@
 console.log('🚀 DataBunker Service Worker starting...');
 
 // Default backend URL (deployed on Railway)
-// IMPORTANTE: Actualizar esta URL después del deployment en Railway
-const DEFAULT_BACKEND_URL = 'http://localhost:5000';  // Cambiar por tu URL de Railway
+const DEFAULT_BACKEND_URL = 'https://upc-backend-chatbotv2-production.up.railway.app';
 
 // Keep service worker alive
 self.addEventListener('activate', () => {
