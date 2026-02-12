@@ -69,36 +69,59 @@ class OxylabsService:
 
             data = response.json()
 
+            # DEBUG: Log full response structure
+            logger.info(f"🔍 DEBUG - Full Oxylabs response keys: {data.keys()}")
+            if 'results' in data and data['results']:
+                first_result = data['results'][0]
+                logger.info(f"🔍 DEBUG - First result keys: {first_result.keys()}")
+                logger.info(f"🔍 DEBUG - Content type: {type(first_result.get('content', 'NOT_FOUND'))}")
+
             if 'results' not in data or not data['results']:
                 logger.warning("⚠️ Oxylabs returned no results")
                 return {'results': []}
 
             # Extract parsed results with validation
             first_result = data['results'][0]
-            parsed = first_result.get('content', {})
+            content = first_result.get('content', {})
 
-            # If content is a string, try to parse it or use raw results
-            if isinstance(parsed, str):
-                logger.warning(f"⚠️ Content is string, using raw results from 'organic'")
-                # Try to get organic results directly from first_result
-                organic = first_result.get('organic', [])
+            # Try multiple paths to get organic results
+            organic = []
+
+            if isinstance(content, dict):
+                # Path 1: content -> results -> organic
+                results_data = content.get('results', {})
+                if isinstance(results_data, dict):
+                    organic = results_data.get('organic', [])
+                    logger.info(f"🔍 Found organic via path: content->results->organic ({len(organic)} items)")
+
+                # Path 2: content -> organic (direct)
                 if not organic:
-                    # If no organic, return empty
-                    logger.error(f"❌ No organic results found")
-                    return {'error': 'No results found', 'results': []}
-            elif isinstance(parsed, dict):
-                # Normal flow: parsed is dict
-                results_data = parsed.get('results', {})
-                if not isinstance(results_data, dict):
-                    logger.error(f"❌ Unexpected 'results' type: {type(results_data)}")
-                    return {'error': 'Invalid response format', 'results': []}
-                organic = results_data.get('organic', [])
-            else:
-                logger.error(f"❌ Unexpected 'content' type: {type(parsed)}")
-                return {'error': 'Invalid response format', 'results': []}
+                    organic = content.get('organic', [])
+                    logger.info(f"🔍 Found organic via path: content->organic ({len(organic)} items)")
 
-            logger.info(f"✅ Oxylabs returned {len(organic)} results")
-            return {'results': organic}
+            elif isinstance(content, str):
+                # Content is a string - try other paths
+                logger.warning(f"⚠️ Content is string, trying alternative paths")
+
+                # Path 3: first_result -> organic (direct)
+                organic = first_result.get('organic', [])
+                logger.info(f"🔍 Found organic via path: first_result->organic ({len(organic)} items)")
+
+            # If still no results, log structure and return error
+            if not organic:
+                logger.error(f"❌ No organic results found in any path")
+                logger.error(f"❌ Available keys in first_result: {first_result.keys()}")
+                if isinstance(content, dict):
+                    logger.error(f"❌ Available keys in content: {content.keys()}")
+                return {'error': 'No organic results found', 'results': []}
+
+            logger.info(f"✅ Oxylabs returned {len(organic)} organic results")
+
+            # Filter for Mexican stores
+            filtered = self._filter_mexican_stores(organic)
+            logger.info(f"✅ After filtering: {len(filtered)} Mexican store results")
+
+            return {'results': filtered}
 
         except requests.Timeout:
             logger.error(f"⏱️ Oxylabs timeout after {self.timeout}s")
@@ -111,3 +134,55 @@ class OxylabsService:
         except Exception as e:
             logger.error(f"❌ Oxylabs unexpected error: {str(e)}")
             return {'error': str(e), 'results': []}
+
+    def _filter_mexican_stores(self, results):
+        """
+        Filter results to prioritize Mexican stores
+
+        Args:
+            results: List of organic results
+
+        Returns:
+            list: Filtered results
+        """
+        # Major Mexican retailers to prioritize
+        mexican_stores = {
+            'walmart', 'bodega aurrera', 'superama', 'sams club',
+            'soriana', 'chedraui', 'la comer', 'city market',
+            'heb', 'costco', 'mercado libre', 'amazon',
+            'liverpool', 'palacio de hierro', 'coppel',
+            'elektra', 'sanborns', '7-eleven', 'oxxo',
+            'farmacias guadalajara', 'farmacia del ahorro', 'benavides'
+        }
+
+        mexican_results = []
+        other_results = []
+
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+
+            # Check merchant name
+            merchant = item.get('merchant', {})
+            merchant_name = ''
+
+            if isinstance(merchant, dict):
+                merchant_name = merchant.get('name', '').lower()
+            elif isinstance(merchant, str):
+                merchant_name = merchant.lower()
+
+            # Check if it's a Mexican store
+            is_mexican = any(store in merchant_name for store in mexican_stores)
+
+            # Also check URL for .mx domains
+            url = item.get('url', '').lower()
+            is_mx_domain = '.com.mx' in url or '.mx' in url
+
+            if is_mexican or is_mx_domain:
+                mexican_results.append(item)
+            else:
+                other_results.append(item)
+
+        # Prioritize Mexican stores, then add others
+        logger.info(f"🇲🇽 Found {len(mexican_results)} Mexican stores, {len(other_results)} others")
+        return mexican_results + other_results

@@ -39,10 +39,33 @@ class GeminiService:
                 return
 
             genai.configure(api_key=Config.GEMINI_API_KEY)
-            # Use gemini-pro which is stable and widely available
-            self.model = genai.GenerativeModel('gemini-pro')
-            self.available = True
-            logger.info("✅ Gemini initialized successfully")
+
+            # Try multiple model names in order of preference
+            model_names = [
+                'gemini-1.5-pro',
+                'gemini-1.5-flash',
+                'gemini-pro',
+                'models/gemini-1.5-pro',
+                'models/gemini-1.5-flash',
+                'models/gemini-pro'
+            ]
+
+            for model_name in model_names:
+                try:
+                    logger.info(f"🤖 Trying Gemini model: {model_name}")
+                    self.model = genai.GenerativeModel(model_name)
+                    # Test with a simple prompt to verify it works
+                    test_response = self.model.generate_content("Say 'OK'")
+                    logger.info(f"✅ Gemini initialized successfully with model: {model_name}")
+                    self.available = True
+                    return
+                except Exception as model_error:
+                    logger.warning(f"⚠️ Model {model_name} failed: {str(model_error)}")
+                    continue
+
+            # If we get here, no model worked
+            logger.error("❌ No Gemini model worked")
+            self.available = False
 
         except ImportError:
             logger.error("❌ google.generativeai not installed")
@@ -72,16 +95,19 @@ class GeminiService:
             return self._format_raw_results(results)
 
         try:
-            prompt = f"""Analiza estos resultados de Google Shopping para "{query}".
+            prompt = f"""Analiza estos resultados de Google Shopping México para "{query}".
 
 Resultados:
 {json.dumps(results[:10], indent=2, ensure_ascii=False)}
 
 IMPORTANTE:
-1. Solo incluye 1 resultado por tienda/dominio (deduplica por seller/domain)
-2. Extrae: title, price (como número), currency, seller, link
-3. Normaliza precios a formato numérico (ej: "127.00")
-4. Marca el source como "oxylabs_shopping"
+1. PRIORIZA tiendas mexicanas: Walmart, Soriana, Chedraui, HEB, La Comer, Bodega Aurrera, Liverpool, etc.
+2. Solo incluye 1 resultado por tienda/dominio (deduplica por seller/domain)
+3. Extrae: title, price (como número), currency, seller, link (URL completa del campo 'url')
+4. Normaliza precios a formato numérico (ej: "127.00")
+5. Verifica que los links sean válidos (no vacíos)
+6. Marca el source como "oxylabs_shopping"
+7. SOLO incluye resultados que tengan precio Y link válidos
 
 Retorna SOLO JSON válido en este formato:
 {{
@@ -91,7 +117,7 @@ Retorna SOLO JSON válido en este formato:
       "price": 100.00,
       "currency": "MXN",
       "seller": "Tienda",
-      "link": "URL",
+      "link": "URL completa",
       "source": "oxylabs_shopping"
     }}
   ],
@@ -139,37 +165,51 @@ Retorna SOLO JSON válido en este formato:
         offers = []
         seen_sellers = set()
 
-        for item in results[:10]:
+        for item in results[:15]:  # Check more items
             # Validate item is a dictionary
             if not isinstance(item, dict):
                 logger.warning(f"⚠️ Skipping non-dict item: {type(item)}")
                 continue
 
+            # Extract merchant/seller
             merchant = item.get('merchant', {})
-            seller = merchant.get('name', 'Unknown') if isinstance(merchant, dict) else 'Unknown'
+            if isinstance(merchant, dict):
+                seller = merchant.get('name', 'Unknown')
+            elif isinstance(merchant, str):
+                seller = merchant
+            else:
+                seller = 'Unknown'
 
             # Deduplicate by seller
             if seller in seen_sellers:
                 continue
-            seen_sellers.add(seller)
 
             # Extract price
             price = self._normalize_price(item.get('price', ''))
             if not price:
+                logger.debug(f"⚠️ Skipping item with no valid price: {item.get('title', 'Unknown')}")
                 continue
+
+            # Extract link - try multiple fields
+            link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
+            if not link or not link.startswith('http'):
+                logger.debug(f"⚠️ Skipping item with no valid link: {item.get('title', 'Unknown')}")
+                continue
+
+            seen_sellers.add(seller)
 
             offers.append({
                 'title': item.get('title', 'Unknown Product'),
                 'price': price,
                 'currency': 'MXN',
                 'seller': seller,
-                'link': item.get('url', ''),
+                'link': link,
                 'source': 'oxylabs_shopping'
             })
 
         return {
             'offers': offers,
-            'summary': f'Found {len(offers)} offers (without AI analysis)',
+            'summary': f'Found {len(offers)} offers from Mexican stores (without AI analysis)',
             'total_offers': len(offers),
             'powered_by': 'oxylabs (no AI)'
         }
