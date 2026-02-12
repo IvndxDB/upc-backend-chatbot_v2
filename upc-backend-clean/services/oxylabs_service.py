@@ -87,25 +87,41 @@ class OxylabsService:
             # Try multiple paths to get organic results
             organic = []
 
-            if isinstance(content, dict):
-                # Path 1: content -> results -> organic
+            if isinstance(content, str):
+                # Content is a JSON string - parse it first!
+                logger.info(f"🔍 Content is string, parsing as JSON...")
+                try:
+                    import json
+                    parsed_content = json.loads(content)
+                    logger.info(f"🔍 Parsed content keys: {parsed_content.keys() if isinstance(parsed_content, dict) else 'not a dict'}")
+
+                    if isinstance(parsed_content, dict):
+                        # Path 1: parsed -> results -> organic
+                        results_data = parsed_content.get('results', {})
+                        if isinstance(results_data, dict):
+                            organic = results_data.get('organic', [])
+                            logger.info(f"🔍 Found organic via path: parsed_content->results->organic ({len(organic)} items)")
+
+                        # Path 2: parsed -> organic (direct)
+                        if not organic:
+                            organic = parsed_content.get('organic', [])
+                            logger.info(f"🔍 Found organic via path: parsed_content->organic ({len(organic)} items)")
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Failed to parse content as JSON: {str(e)}")
+                    logger.error(f"❌ Content preview: {content[:200]}...")
+
+            elif isinstance(content, dict):
+                # Path 3: content is already a dict -> results -> organic
                 results_data = content.get('results', {})
                 if isinstance(results_data, dict):
                     organic = results_data.get('organic', [])
                     logger.info(f"🔍 Found organic via path: content->results->organic ({len(organic)} items)")
 
-                # Path 2: content -> organic (direct)
+                # Path 4: content -> organic (direct)
                 if not organic:
                     organic = content.get('organic', [])
                     logger.info(f"🔍 Found organic via path: content->organic ({len(organic)} items)")
-
-            elif isinstance(content, str):
-                # Content is a string - try other paths
-                logger.warning(f"⚠️ Content is string, trying alternative paths")
-
-                # Path 3: first_result -> organic (direct)
-                organic = first_result.get('organic', [])
-                logger.info(f"🔍 Found organic via path: first_result->organic ({len(organic)} items)")
 
             # If still no results, log structure and return error
             if not organic:
