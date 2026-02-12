@@ -74,17 +74,28 @@ class OxylabsService:
                 return {'results': []}
 
             # Extract parsed results with validation
-            parsed = data['results'][0].get('content', {})
-            if not isinstance(parsed, dict):
+            first_result = data['results'][0]
+            parsed = first_result.get('content', {})
+
+            # If content is a string, try to parse it or use raw results
+            if isinstance(parsed, str):
+                logger.warning(f"⚠️ Content is string, using raw results from 'organic'")
+                # Try to get organic results directly from first_result
+                organic = first_result.get('organic', [])
+                if not organic:
+                    # If no organic, return empty
+                    logger.error(f"❌ No organic results found")
+                    return {'error': 'No results found', 'results': []}
+            elif isinstance(parsed, dict):
+                # Normal flow: parsed is dict
+                results_data = parsed.get('results', {})
+                if not isinstance(results_data, dict):
+                    logger.error(f"❌ Unexpected 'results' type: {type(results_data)}")
+                    return {'error': 'Invalid response format', 'results': []}
+                organic = results_data.get('organic', [])
+            else:
                 logger.error(f"❌ Unexpected 'content' type: {type(parsed)}")
                 return {'error': 'Invalid response format', 'results': []}
-
-            results_data = parsed.get('results', {})
-            if not isinstance(results_data, dict):
-                logger.error(f"❌ Unexpected 'results' type: {type(results_data)}")
-                return {'error': 'Invalid response format', 'results': []}
-
-            organic = results_data.get('organic', [])
 
             logger.info(f"✅ Oxylabs returned {len(organic)} results")
             return {'results': organic}
