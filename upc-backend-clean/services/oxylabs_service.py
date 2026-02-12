@@ -93,19 +93,36 @@ class OxylabsService:
                 try:
                     import json
                     parsed_content = json.loads(content)
-                    logger.info(f"🔍 Parsed content keys: {parsed_content.keys() if isinstance(parsed_content, dict) else 'not a dict'}")
 
                     if isinstance(parsed_content, dict):
+                        logger.info(f"🔍 Parsed content keys: {list(parsed_content.keys())}")
+
+                        # Log nested structure
+                        if 'results' in parsed_content:
+                            results_data = parsed_content['results']
+                            logger.info(f"🔍 'results' type: {type(results_data)}")
+                            if isinstance(results_data, dict):
+                                logger.info(f"🔍 'results' keys: {list(results_data.keys())}")
+
                         # Path 1: parsed -> results -> organic
                         results_data = parsed_content.get('results', {})
                         if isinstance(results_data, dict):
                             organic = results_data.get('organic', [])
-                            logger.info(f"🔍 Found organic via path: parsed_content->results->organic ({len(organic)} items)")
+                            if organic:
+                                logger.info(f"🔍 Found organic via path: parsed_content->results->organic ({len(organic)} items)")
 
                         # Path 2: parsed -> organic (direct)
                         if not organic:
                             organic = parsed_content.get('organic', [])
-                            logger.info(f"🔍 Found organic via path: parsed_content->organic ({len(organic)} items)")
+                            if organic:
+                                logger.info(f"🔍 Found organic via path: parsed_content->organic ({len(organic)} items)")
+
+                        # Path 3: Check if results is a list directly
+                        if not organic and isinstance(parsed_content.get('results'), list):
+                            organic = parsed_content.get('results', [])
+                            logger.info(f"🔍 Found results as list: parsed_content->results ({len(organic)} items)")
+                    else:
+                        logger.warning(f"🔍 Parsed content is not a dict: {type(parsed_content)}")
 
                 except json.JSONDecodeError as e:
                     logger.error(f"❌ Failed to parse content as JSON: {str(e)}")
@@ -153,32 +170,50 @@ class OxylabsService:
 
     def _filter_mexican_stores(self, results):
         """
-        Filter results to prioritize Mexican stores
+        Filter results to ONLY show Mexican stores
+        Blocks non-Mexican domains and stores
 
         Args:
             results: List of organic results
 
         Returns:
-            list: Filtered results
+            list: Filtered results (ONLY Mexican stores)
         """
-        # Major Mexican retailers to prioritize
+        # Major Mexican retailers
         mexican_stores = {
-            'walmart', 'bodega aurrera', 'superama', 'sams club',
+            'walmart', 'bodega aurrera', 'superama', 'sams club', 'sam\'s',
             'soriana', 'chedraui', 'la comer', 'city market',
-            'heb', 'costco', 'mercado libre', 'amazon',
+            'heb', 'costco', 'mercado libre', 'amazon.com.mx',
             'liverpool', 'palacio de hierro', 'coppel',
             'elektra', 'sanborns', '7-eleven', 'oxxo',
-            'farmacias guadalajara', 'farmacia del ahorro', 'benavides'
+            'farmacias guadalajara', 'farmacia del ahorro', 'benavides',
+            'fresko', 'city club', 'smart', 'alsuper'
         }
 
+        # Domains to block (European/non-Mexican)
+        blocked_domains = [
+            '.es', '.com.es', 'valencia', 'parafarmacia',
+            'farmacia-', '.fr', '.de', '.uk', '.eu'
+        ]
+
         mexican_results = []
-        other_results = []
+        blocked_count = 0
 
         for item in results:
             if not isinstance(item, dict):
                 continue
 
-            # Check merchant name
+            # Get URL first
+            url = item.get('url', '').lower()
+
+            # Block non-Mexican domains
+            is_blocked = any(domain in url for domain in blocked_domains)
+            if is_blocked:
+                blocked_count += 1
+                logger.debug(f"🚫 Blocking non-Mexican domain: {url}")
+                continue
+
+            # Check if it's a Mexican store
             merchant = item.get('merchant', {})
             merchant_name = ''
 
@@ -187,18 +222,16 @@ class OxylabsService:
             elif isinstance(merchant, str):
                 merchant_name = merchant.lower()
 
-            # Check if it's a Mexican store
-            is_mexican = any(store in merchant_name for store in mexican_stores)
+            # Must be Mexican store OR .mx domain
+            is_mexican_store = any(store in merchant_name for store in mexican_stores)
+            is_mx_domain = '.com.mx' in url or url.endswith('.mx')
 
-            # Also check URL for .mx domains
-            url = item.get('url', '').lower()
-            is_mx_domain = '.com.mx' in url or '.mx' in url
-
-            if is_mexican or is_mx_domain:
+            if is_mexican_store or is_mx_domain:
                 mexican_results.append(item)
             else:
-                other_results.append(item)
+                blocked_count += 1
+                logger.debug(f"🚫 Blocking non-Mexican store: {merchant_name} ({url})")
 
-        # Prioritize Mexican stores, then add others
-        logger.info(f"🇲🇽 Found {len(mexican_results)} Mexican stores, {len(other_results)} others")
-        return mexican_results + other_results
+        # ONLY return Mexican stores
+        logger.info(f"🇲🇽 Keeping {len(mexican_results)} Mexican stores, blocked {blocked_count} non-Mexican")
+        return mexican_results
