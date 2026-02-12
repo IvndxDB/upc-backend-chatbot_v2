@@ -139,6 +139,11 @@ Retorna SOLO JSON válido en este formato:
         seen_sellers = set()
 
         for item in results[:10]:
+            # Validate item is a dictionary
+            if not isinstance(item, dict):
+                logger.warning(f"⚠️ Skipping non-dict item: {type(item)}")
+                continue
+
             merchant = item.get('merchant', {})
             seller = merchant.get('name', 'Unknown') if isinstance(merchant, dict) else 'Unknown'
 
