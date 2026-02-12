@@ -234,7 +234,7 @@ class OxylabsService:
             list: List of product dicts with price info
         """
         import re
-        from urllib.parse import urlparse
+        from urllib.parse import urlparse, parse_qs, unquote
 
         products = []
         logger.info("🔍 Transforming search results to product format...")
@@ -245,9 +245,15 @@ class OxylabsService:
 
             title = item.get('title', '')
             desc = item.get('desc', '')  # Snippet/description
-            url = item.get('url', '')
+            raw_url = item.get('url', '')
 
-            if not url:
+            if not raw_url:
+                continue
+
+            # Clean URL - handle Google redirect format
+            url = self._clean_url(raw_url)
+            if not url or not url.startswith('http'):
+                logger.debug(f"⚠️ Invalid URL after cleaning: {raw_url[:80]}...")
                 continue
 
             # Extract domain as merchant name
@@ -260,6 +266,9 @@ class OxylabsService:
 
             # Extract price from snippet using regex
             price = self._extract_price_from_text(desc + ' ' + title)
+
+            # Log URL for debugging
+            logger.debug(f"🔗 {merchant_name}: {url[:80]}...")
 
             # Create product dict
             product = {
@@ -302,6 +311,47 @@ class OxylabsService:
             if match:
                 # Return the captured price
                 return match.group(1)
+
+        return ''
+
+    def _clean_url(self, url):
+        """
+        Clean URL - handle Google redirect format and extract actual URL
+
+        Args:
+            url: Raw URL from search result
+
+        Returns:
+            str: Cleaned URL or empty string if invalid
+        """
+        from urllib.parse import urlparse, parse_qs, unquote
+        import re
+
+        if not url:
+            return ''
+
+        # If URL already looks good (starts with http), return as-is
+        if url.startswith('http://') or url.startswith('https://'):
+            return url
+
+        # Handle Google redirect format: /url?q=https://actual-url.com&...
+        if url.startswith('/url?'):
+            try:
+                # Parse query string
+                parsed = urlparse(url)
+                params = parse_qs(parsed.query)
+                # Extract 'q' parameter (the actual URL)
+                if 'q' in params and params['q']:
+                    actual_url = unquote(params['q'][0])
+                    if actual_url.startswith('http'):
+                        return actual_url
+            except:
+                pass
+
+        # Handle relative URLs - try to construct full URL
+        # (shouldn't happen with Oxylabs, but just in case)
+        if url.startswith('/'):
+            return ''  # Can't construct without domain
 
         return ''
 
