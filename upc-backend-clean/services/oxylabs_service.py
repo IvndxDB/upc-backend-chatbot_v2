@@ -79,12 +79,12 @@ class OxylabsService:
         logger.info(f"🔍 Original query: {query}")
         logger.info(f"🔍 Simplified query: {simplified_query}")
 
-        # Simplified payload - remove problematic context params
+        # Use parse: False to get raw HTML (parse: True gives 613 errors)
         payload = {
             'source': 'google_shopping_search',
             'domain': 'com.mx',
             'query': simplified_query,
-            'parse': True
+            'parse': False  # Get raw HTML instead of parsed data
         }
 
         try:
@@ -129,45 +129,45 @@ class OxylabsService:
             organic = []
 
             if isinstance(content, str):
-                # Content is a JSON string - parse it first!
-                logger.info(f"🔍 Content is string, parsing as JSON...")
-                try:
-                    import json
-                    parsed_content = json.loads(content)
+                # Content might be HTML (parse: False) or JSON (parse: True)
+                logger.info(f"🔍 Content is string (length: {len(content)})")
 
-                    if isinstance(parsed_content, dict):
-                        logger.info(f"🔍 Parsed content keys: {list(parsed_content.keys())}")
+                # Try parsing as JSON first
+                if content.strip().startswith('{'):
+                    logger.info(f"🔍 Content looks like JSON, parsing...")
+                    try:
+                        import json
+                        parsed_content = json.loads(content)
 
-                        # Log nested structure
-                        if 'results' in parsed_content:
-                            results_data = parsed_content['results']
-                            logger.info(f"🔍 'results' type: {type(results_data)}")
+                        if isinstance(parsed_content, dict):
+                            logger.info(f"🔍 Parsed JSON keys: {list(parsed_content.keys())}")
+
+                            # Try multiple paths for JSON
+                            results_data = parsed_content.get('results', {})
                             if isinstance(results_data, dict):
-                                logger.info(f"🔍 'results' keys: {list(results_data.keys())}")
+                                organic = results_data.get('organic', [])
+                                if organic:
+                                    logger.info(f"🔍 Found organic via JSON: {len(organic)} items")
 
-                        # Path 1: parsed -> results -> organic
-                        results_data = parsed_content.get('results', {})
-                        if isinstance(results_data, dict):
-                            organic = results_data.get('organic', [])
-                            if organic:
-                                logger.info(f"🔍 Found organic via path: parsed_content->results->organic ({len(organic)} items)")
+                            if not organic:
+                                organic = parsed_content.get('organic', [])
+                                if organic:
+                                    logger.info(f"🔍 Found organic direct: {len(organic)} items")
 
-                        # Path 2: parsed -> organic (direct)
-                        if not organic:
-                            organic = parsed_content.get('organic', [])
-                            if organic:
-                                logger.info(f"🔍 Found organic via path: parsed_content->organic ({len(organic)} items)")
+                    except json.JSONDecodeError:
+                        logger.warning("⚠️ Failed to parse as JSON, will try HTML")
 
-                        # Path 3: Check if results is a list directly
-                        if not organic and isinstance(parsed_content.get('results'), list):
-                            organic = parsed_content.get('results', [])
-                            logger.info(f"🔍 Found results as list: parsed_content->results ({len(organic)} items)")
-                    else:
-                        logger.warning(f"🔍 Parsed content is not a dict: {type(parsed_content)}")
+                # If JSON parsing failed or no results, try HTML parsing
+                if not organic and '<html' in content.lower():
+                    logger.info("🔍 Content is HTML, parsing with regex...")
+                    organic = self._parse_html_results(content)
+                    if organic:
+                        logger.info(f"🔍 Found {len(organic)} results from HTML")
 
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Failed to parse content as JSON: {str(e)}")
-                    logger.error(f"❌ Content preview: {content[:200]}...")
+                # If still empty and content exists, it might be empty HTML
+                if not organic and len(content) > 0:
+                    logger.error(f"❌ Content is string but couldn't extract results")
+                    logger.error(f"❌ Content preview: {content[:500]}")
 
             elif isinstance(content, dict):
                 # Path 3: content is already a dict -> results -> organic
@@ -208,6 +208,52 @@ class OxylabsService:
         except Exception as e:
             logger.error(f"❌ Oxylabs unexpected error: {str(e)}")
             return {'error': str(e), 'results': []}
+
+    def _parse_html_results(self, html_content):
+        """
+        Parse Google Shopping HTML to extract product results
+        Simple regex-based parser for when parse: False is used
+
+        Args:
+            html_content: Raw HTML string from Oxylabs
+
+        Returns:
+            list: List of product dicts
+        """
+        import re
+        import json
+
+        results = []
+        logger.info("🔍 Parsing HTML content for product data...")
+
+        try:
+            # Google Shopping often embeds JSON-LD data in script tags
+            # Look for product data in script tags
+            script_pattern = r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
+            scripts = re.findall(script_pattern, html_content, re.DOTALL | re.IGNORECASE)
+
+            for script in scripts:
+                try:
+                    data = json.loads(script)
+                    if isinstance(data, dict) and data.get('@type') == 'Product':
+                        # Extract product info
+                        product = {
+                            'title': data.get('name', ''),
+                            'price': data.get('offers', {}).get('price', ''),
+                            'url': data.get('url', ''),
+                            'merchant': {'name': data.get('brand', {}).get('name', 'Unknown')}
+                        }
+                        if product['title'] and product['price']:
+                            results.append(product)
+                except:
+                    continue
+
+            logger.info(f"✅ Parsed {len(results)} products from HTML JSON-LD")
+            return results
+
+        except Exception as e:
+            logger.error(f"❌ HTML parsing error: {str(e)}")
+            return []
 
     def _filter_mexican_stores(self, results):
         """
