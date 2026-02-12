@@ -39,15 +39,12 @@ class OxylabsService:
             logger.error("❌ Oxylabs credentials not configured")
             return {'error': 'Oxylabs not configured', 'results': []}
 
+        # Simplified payload - remove problematic context params
         payload = {
             'source': 'google_shopping_search',
             'domain': 'com.mx',
             'query': query,
-            'parse': True,
-            'context': [
-                {'key': 'filter', 'value': '1'},
-                {'key': 'min_price', 'value': 1}
-            ]
+            'parse': True
         }
 
         try:
@@ -74,7 +71,11 @@ class OxylabsService:
             if 'results' in data and data['results']:
                 first_result = data['results'][0]
                 logger.info(f"🔍 DEBUG - First result keys: {first_result.keys()}")
+                logger.info(f"🔍 DEBUG - Status code: {first_result.get('status_code', 'NOT_FOUND')}")
+                logger.info(f"🔍 DEBUG - Parser type: {first_result.get('parser_type', 'NOT_FOUND')}")
                 logger.info(f"🔍 DEBUG - Content type: {type(first_result.get('content', 'NOT_FOUND'))}")
+                content_preview = str(first_result.get('content', ''))[:300]
+                logger.info(f"🔍 DEBUG - Content preview: {content_preview}")
 
             if 'results' not in data or not data['results']:
                 logger.warning("⚠️ Oxylabs returned no results")
