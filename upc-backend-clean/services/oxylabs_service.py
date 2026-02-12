@@ -79,12 +79,18 @@ class OxylabsService:
         logger.info(f"🔍 Original query: {query}")
         logger.info(f"🔍 Simplified query: {simplified_query}")
 
-        # Use parse: False to get raw HTML (parse: True gives 613 errors)
+        # Use Google Search (not Shopping) with site:.mx filter for Mexican stores
+        # This includes specific details like flavor (uva) and size (625ml)
+        search_query = f"{simplified_query} precio site:.mx"
+        logger.info(f"🔍 Search query: {search_query}")
+
+        # Use google_search with parse: True (works reliably)
         payload = {
-            'source': 'google_shopping_search',
+            'source': 'google_search',  # Changed from google_shopping_search
             'domain': 'com.mx',
-            'query': simplified_query,
-            'parse': False  # Get raw HTML instead of parsed data
+            'query': search_query,
+            'parse': True,  # Parsing works well for google_search
+            'limit': 20  # Get more results to filter
         }
 
         try:
@@ -170,16 +176,23 @@ class OxylabsService:
                     logger.error(f"❌ Content preview: {content[:500]}")
 
             elif isinstance(content, dict):
-                # Path 3: content is already a dict -> results -> organic
+                # For google_search: content -> results -> organic
                 results_data = content.get('results', {})
                 if isinstance(results_data, dict):
                     organic = results_data.get('organic', [])
-                    logger.info(f"🔍 Found organic via path: content->results->organic ({len(organic)} items)")
+                    if organic:
+                        logger.info(f"🔍 Found organic via google_search: {len(organic)} items")
 
-                # Path 4: content -> organic (direct)
+                # Fallback: content -> organic (direct)
                 if not organic:
                     organic = content.get('organic', [])
-                    logger.info(f"🔍 Found organic via path: content->organic ({len(organic)} items)")
+                    if organic:
+                        logger.info(f"🔍 Found organic direct: {len(organic)} items")
+
+                # Transform google_search results to shopping-like format
+                if organic:
+                    organic = self._transform_search_results(organic)
+                    logger.info(f"🔍 Transformed {len(organic)} search results to product format")
 
             # If still no results, log structure and return error
             if not organic:
@@ -208,6 +221,89 @@ class OxylabsService:
         except Exception as e:
             logger.error(f"❌ Oxylabs unexpected error: {str(e)}")
             return {'error': str(e), 'results': []}
+
+    def _transform_search_results(self, search_results):
+        """
+        Transform Google Search results into product format
+        Extracts prices from snippets and domain from URLs
+
+        Args:
+            search_results: List of google_search organic results
+
+        Returns:
+            list: List of product dicts with price info
+        """
+        import re
+        from urllib.parse import urlparse
+
+        products = []
+        logger.info("🔍 Transforming search results to product format...")
+
+        for item in search_results:
+            if not isinstance(item, dict):
+                continue
+
+            title = item.get('title', '')
+            desc = item.get('desc', '')  # Snippet/description
+            url = item.get('url', '')
+
+            if not url:
+                continue
+
+            # Extract domain as merchant name
+            try:
+                domain = urlparse(url).netloc
+                # Clean domain: www.walmart.com.mx -> Walmart
+                merchant_name = domain.replace('www.', '').split('.')[0].title()
+            except:
+                merchant_name = 'Unknown'
+
+            # Extract price from snippet using regex
+            price = self._extract_price_from_text(desc + ' ' + title)
+
+            # Create product dict
+            product = {
+                'title': title,
+                'price': price if price else '',  # Keep as string for now
+                'url': url,
+                'desc': desc,  # Keep snippet for Gemini analysis
+                'merchant': {'name': merchant_name}
+            }
+
+            products.append(product)
+
+        logger.info(f"✅ Transformed {len(products)} search results")
+        return products
+
+    def _extract_price_from_text(self, text):
+        """
+        Extract price from text using regex patterns
+
+        Args:
+            text: Text containing potential price
+
+        Returns:
+            str: Extracted price or empty string
+        """
+        import re
+
+        if not text:
+            return ''
+
+        # Common Mexican price patterns
+        patterns = [
+            r'\$\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',  # $1,234.56 or $25.00
+            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:MXN|pesos?|mx)',  # 1,234.56 MXN
+            r'precio:?\s*\$?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',  # precio: $25.00
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                # Return the captured price
+                return match.group(1)
+
+        return ''
 
     def _parse_html_results(self, html_content):
         """
