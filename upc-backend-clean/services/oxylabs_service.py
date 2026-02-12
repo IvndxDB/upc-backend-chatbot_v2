@@ -22,6 +22,41 @@ class OxylabsService:
         """Check if Oxylabs credentials are configured"""
         return bool(self.username and self.password)
 
+    def _simplify_query(self, query):
+        """
+        Simplify search query for better Oxylabs results
+
+        Args:
+            query: Original search query
+
+        Returns:
+            str: Simplified query
+        """
+        import re
+
+        # Remove special characters and normalize
+        cleaned = query.replace('–', ' ').replace('—', ' ')
+        cleaned = re.sub(r'[^\w\s\.]', ' ', cleaned)
+
+        # Remove common filler words (Spanish)
+        filler_words = [
+            'con', 'de', 'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
+            'bebida', 'producto', 'articulo', 'pack', 'paquete',
+            'sabor', 'hidratante', 'electrolitos', 'vitamina',
+            'tubo', 'tabletas', 'efervecentes', 'capsulas'
+        ]
+
+        # Split into words
+        words = cleaned.lower().split()
+
+        # Keep important words (not in filler list) and limit to 5 words
+        important_words = [w for w in words if w not in filler_words and len(w) > 2]
+
+        # Keep first 5 important words
+        simplified = ' '.join(important_words[:5])
+
+        return simplified if simplified else query
+
     def search_shopping(self, query):
         """
         Search Google Shopping via Oxylabs
@@ -39,11 +74,16 @@ class OxylabsService:
             logger.error("❌ Oxylabs credentials not configured")
             return {'error': 'Oxylabs not configured', 'results': []}
 
+        # Simplify query for better results
+        simplified_query = self._simplify_query(query)
+        logger.info(f"🔍 Original query: {query}")
+        logger.info(f"🔍 Simplified query: {simplified_query}")
+
         # Simplified payload - remove problematic context params
         payload = {
             'source': 'google_shopping_search',
             'domain': 'com.mx',
-            'query': query,
+            'query': simplified_query,
             'parse': True
         }
 
