@@ -1,0 +1,159 @@
+111<!DOCTYPE html>
+<html>
+<head>
+    <title>DataBunker Icon Generator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .icon-container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .icon-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        canvas {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #5a6fd6;
+        }
+        .instructions {
+            background: #e8f4fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>DataBunker Price Checker - Icon Generator</h1>
+
+    <div class="instructions">
+        <p><strong>Instrucciones:</strong></p>
+        <ol>
+            <li>Abre este archivo en Chrome</li>
+            <li>Haz clic en cada boton "Descargar" para guardar los iconos</li>
+            <li>Guarda los iconos en la carpeta <code>chrome-extension/icons/</code></li>
+        </ol>
+    </div>
+
+    <div class="icon-container">
+        <div class="icon-box">
+            <h3>16x16</h3>
+            <canvas id="icon16" width="16" height="16"></canvas>
+            <br>
+            <button onclick="downloadIcon(16)">Descargar icon16.png</button>
+        </div>
+        <div class="icon-box">
+            <h3>32x32</h3>
+            <canvas id="icon32" width="32" height="32"></canvas>
+            <br>
+            <button onclick="downloadIcon(32)">Descargar icon32.png</button>
+        </div>
+        <div class="icon-box">
+            <h3>48x48</h3>
+            <canvas id="icon48" width="48" height="48"></canvas>
+            <br>
+            <button onclick="downloadIcon(48)">Descargar icon48.png</button>
+        </div>
+        <div class="icon-box">
+            <h3>128x128</h3>
+            <canvas id="icon128" width="128" height="128"></canvas>
+            <br>
+            <button onclick="downloadIcon(128)">Descargar icon128.png</button>
+        </div>
+    </div>
+
+    <script>
+        function drawIcon(size) {
+            const canvas = document.getElementById('icon' + size);
+            const ctx = canvas.getContext('2d');
+
+            // Gradient background
+            const gradient = ctx.createLinearGradient(0, 0, size, size);
+            gradient.addColorStop(0, '#667eea');
+            gradient.addColorStop(1, '#764ba2');
+
+            // Draw rounded rectangle background
+            const radius = size * 0.2;
+            ctx.beginPath();
+            ctx.moveTo(radius, 0);
+            ctx.lineTo(size - radius, 0);
+            ctx.quadraticCurveTo(size, 0, size, radius);
+            ctx.lineTo(size, size - radius);
+            ctx.quadraticCurveTo(size, size, size - radius, size);
+            ctx.lineTo(radius, size);
+            ctx.quadraticCurveTo(0, size, 0, size - radius);
+            ctx.lineTo(0, radius);
+            ctx.quadraticCurveTo(0, 0, radius, 0);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Draw price tag icon
+            ctx.strokeStyle = 'white';
+            ctx.fillStyle = 'white';
+            ctx.lineWidth = size * 0.06;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            const padding = size * 0.2;
+            const centerX = size / 2;
+            const centerY = size / 2;
+
+            // Dollar sign
+            ctx.font = `bold ${size * 0.5}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('$', centerX, centerY);
+
+            // Small magnifying glass in corner
+            if (size >= 32) {
+                const mgSize = size * 0.25;
+                const mgX = size - mgSize - padding * 0.3;
+                const mgY = size - mgSize - padding * 0.3;
+
+                ctx.beginPath();
+                ctx.arc(mgX, mgY, mgSize * 0.4, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(mgX + mgSize * 0.3, mgY + mgSize * 0.3);
+                ctx.lineTo(mgX + mgSize * 0.5, mgY + mgSize * 0.5);
+                ctx.stroke();
+            }
+        }
+
+        function downloadIcon(size) {
+            const canvas = document.getElementById('icon' + size);
+            const link = document.createElement('a');
+            link.download = 'icon' + size + '.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // Draw all icons on load
+        [16, 32, 48, 128].forEach(drawIcon);
+    </script>
+</body>
+</html>
