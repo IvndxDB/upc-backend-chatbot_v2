@@ -182,24 +182,24 @@ Retorna SOLO JSON válido en este formato:
 
             # Deduplicate by seller
             if seller in seen_sellers:
-                logger.debug(f"⚠️ Skipping duplicate seller: {seller}")
+                logger.info(f"⚠️ Skipping duplicate seller: {seller}")
                 continue
 
             # Extract price
             raw_price = item.get('price', '')
             price = self._normalize_price(raw_price)
             if not price:
-                logger.debug(f"⚠️ Skipping {seller} - no valid price (raw: '{raw_price}')")
+                logger.info(f"⚠️ Skipping {seller} - no valid price (raw: '{raw_price}')")
                 continue
 
             # Extract link - try multiple fields
             link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
             if not link or not link.startswith('http'):
-                logger.debug(f"⚠️ Skipping {seller} - invalid link (link: '{link[:50] if link else 'EMPTY'}')")
+                logger.info(f"⚠️ Skipping {seller} - invalid link (link: '{link[:50] if link else 'EMPTY'}')")
                 continue
 
             seen_sellers.add(seller)
-            logger.debug(f"✅ Added offer from {seller}: ${price} - {link[:60]}...")
+            logger.info(f"✅ Added offer from {seller}: ${price} - {link[:60]}...")
 
             offers.append({
                 'title': item.get('title', 'Unknown Product'),

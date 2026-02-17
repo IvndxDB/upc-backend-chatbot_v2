@@ -253,7 +253,7 @@ class OxylabsService:
             # Clean URL - handle Google redirect format
             url = self._clean_url(raw_url)
             if not url or not url.startswith('http'):
-                logger.debug(f"⚠️ Invalid URL after cleaning: {raw_url[:80]}...")
+                logger.info(f"⚠️ Invalid URL after cleaning: {raw_url[:80]}...")
                 continue
 
             # Extract domain as merchant name
@@ -268,7 +268,7 @@ class OxylabsService:
             price = self._extract_price_from_text(desc + ' ' + title)
 
             # Log URL for debugging
-            logger.debug(f"🔗 {merchant_name}: {url[:80]}...")
+            logger.info(f"🔗 {merchant_name}: {url[:80]}... | Price: {price if price else 'NO PRICE'}")
 
             # Create product dict
             product = {
