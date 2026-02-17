@@ -66,6 +66,7 @@ class DataBunkerPriceChecker {
     document.getElementById('settingsBtn').addEventListener('click', () => this.openSettings());
     document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
     document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
+    document.getElementById('clearCacheBtn').addEventListener('click', () => this.clearCache());
 
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
@@ -548,6 +549,15 @@ class DataBunkerPriceChecker {
       this.addMessage('bot', 'No se pudo conectar al backend con la nueva URL.', true);
     } else {
       this.addMessage('bot', 'Configuracion guardada correctamente.');
+    }
+  }
+
+  async clearCache() {
+    try {
+      await dataBunkerAPI.clearCache();
+      this.addMessage('bot', '🗑️ Cache limpiado correctamente. Los proximos resultados seran actualizados.');
+    } catch (error) {
+      this.addMessage('bot', `Error al limpiar cache: ${error.message}`, true);
     }
   }
 }

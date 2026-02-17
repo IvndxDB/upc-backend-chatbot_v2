@@ -144,14 +144,92 @@ class DataBunkerAPI {
   }
 
   /**
+   * Get cache key for a query
+   */
+  _getCacheKey(query, upc) {
+    return `price_cache_${query || ''}_${upc || ''}`.toLowerCase().replace(/\s+/g, '_');
+  }
+
+  /**
+   * Check if cache is valid (less than 12 hours old)
+   */
+  _isCacheValid(cacheData) {
+    if (!cacheData || !cacheData.timestamp) return false;
+    const TWELVE_HOURS = 12 * 60 * 60 * 1000; // 12 hours in ms
+    const now = Date.now();
+    return (now - cacheData.timestamp) < TWELVE_HOURS;
+  }
+
+  /**
+   * Get cached results if valid
+   */
+  async getCachedResults(query, upc) {
+    try {
+      const cacheKey = this._getCacheKey(query, upc);
+      const result = await chrome.storage.local.get([cacheKey]);
+      const cacheData = result[cacheKey];
+
+      if (this._isCacheValid(cacheData)) {
+        console.log('✅ Using cached results (age:', Math.round((Date.now() - cacheData.timestamp) / 1000 / 60), 'minutes)');
+        return cacheData.result;
+      }
+
+      console.log('⚠️ Cache expired or not found');
+      return null;
+    } catch (error) {
+      console.error('Error reading cache:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Save results to cache
+   */
+  async setCachedResults(query, upc, result) {
+    try {
+      const cacheKey = this._getCacheKey(query, upc);
+      const cacheData = {
+        timestamp: Date.now(),
+        result: result,
+        query: query,
+        upc: upc
+      };
+
+      await chrome.storage.local.set({ [cacheKey]: cacheData });
+      console.log('💾 Results cached for 12 hours');
+    } catch (error) {
+      console.error('Error saving cache:', error);
+    }
+  }
+
+  /**
+   * Clear all cached results
+   */
+  async clearCache() {
+    try {
+      const allData = await chrome.storage.local.get(null);
+      const cacheKeys = Object.keys(allData).filter(key => key.startsWith('price_cache_'));
+
+      if (cacheKeys.length > 0) {
+        await chrome.storage.local.remove(cacheKeys);
+        console.log('🗑️ Cleared', cacheKeys.length, 'cached results');
+      }
+    } catch (error) {
+      console.error('Error clearing cache:', error);
+    }
+  }
+
+  /**
    * Stream price check with real-time updates
    * Adapted for v4 backend using /api/check_price
+   * Now with 12-hour caching
    */
   async streamPriceCheck(input, options = {}, callbacks = {}) {
     const {
       scrapedData = null,
       screenshot = null,
-      sources = { gemini: true, oxylabs: true, perplexity: true }
+      sources = { gemini: true, oxylabs: true, perplexity: true },
+      forceRefresh = false // NEW: option to bypass cache
     } = options;
 
     const {
@@ -163,9 +241,6 @@ class DataBunkerAPI {
     } = callbacks;
 
     try {
-      // Status: Starting search
-      onStatus('Buscando producto...');
-
       // Build query from input and scraped data
       const query = input || scrapedData?.productName || scrapedData?.name || '';
       const upc = scrapedData?.upc || '';
@@ -173,6 +248,21 @@ class DataBunkerAPI {
       if (!query && !upc) {
         throw new Error('Se requiere nombre de producto o UPC');
       }
+
+      // Check cache first (unless forceRefresh is true)
+      if (!forceRefresh) {
+        onStatus('Buscando en cache...');
+        const cachedResult = await this.getCachedResults(query, upc);
+
+        if (cachedResult) {
+          onStatus('Usando resultados guardados ✅');
+          setTimeout(() => onComplete(cachedResult), 100); // Small delay for UX
+          return;
+        }
+      }
+
+      // Status: Starting search
+      onStatus(forceRefresh ? 'Actualizando precios...' : 'Buscando producto...');
 
       onStatus('Consultando precios en tiempo real...');
 
@@ -227,6 +317,9 @@ class DataBunkerAPI {
           );
         }
       }
+
+      // Save to cache
+      await this.setCachedResults(query, upc, result);
 
       // Call onComplete with transformed result
       onComplete(result);
