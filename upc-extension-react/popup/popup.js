@@ -70,10 +70,6 @@ class DataBunkerPriceChecker {
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
 
-    // Store selection modal
-    document.getElementById('closeStoreModalBtn').addEventListener('click', () => this.closeStoreModal());
-    document.getElementById('selectAllStoresBtn').addEventListener('click', () => this.selectAllStores());
-    document.getElementById('confirmStoresBtn').addEventListener('click', () => this.confirmStores());
   }
 
   updateSendButton() {
@@ -121,9 +117,9 @@ class DataBunkerPriceChecker {
     userInput.style.height = 'auto';
     this.updateSendButton();
 
-    // Store query and show store selector modal
+    // Store query and show store selector inline in chat
     this.pendingSearchQuery = message;
-    await this.showStoreSelector();
+    await this.showStoreSelectorInChat();
   }
 
   async processPriceCheck(input) {
@@ -523,108 +519,86 @@ class DataBunkerPriceChecker {
     document.getElementById('productModal').classList.add('hidden');
   }
 
-  async showStoreSelector() {
-    // Load available stores and selected stores from storage
+  async showStoreSelectorInChat() {
     const availableStores = dataBunkerAPI.getAvailableStores();
-    const selectedStoreIds = await dataBunkerAPI.getSelectedStores();
-    this.selectedStores = selectedStoreIds;
+    const savedStoreIds = await dataBunkerAPI.getSelectedStores();
+    this.selectedStores = [...savedStoreIds];
 
-    const storeList = document.getElementById('storeList');
-    storeList.innerHTML = '';
+    const messagesContainer = document.getElementById('messages');
 
-    // Create store checkboxes
-    availableStores.forEach(store => {
-      const isSelected = selectedStoreIds.includes(store.id);
+    // Create bot message bubble with store toggles
+    const selectorEl = document.createElement('div');
+    selectorEl.className = 'message bot store-selector-message';
+    selectorEl.id = 'store-selector-bubble';
 
-      const storeItem = document.createElement('div');
-      storeItem.className = `store-item ${isSelected ? 'selected' : ''}`;
-      storeItem.dataset.storeId = store.id;
-
-      storeItem.innerHTML = `
-        <input type="checkbox" id="store-${store.id}" ${isSelected ? 'checked' : ''}>
-        <span class="store-logo">${store.logo}</span>
-        <div class="store-info">
-          <div class="store-name">${store.name}</div>
-          <div class="store-domain">${store.domain}</div>
-        </div>
+    // Build the store toggle buttons
+    const storeButtonsHtml = availableStores.map(store => {
+      const isSelected = this.selectedStores.includes(store.id);
+      return `
+        <button class="store-toggle-btn ${isSelected ? 'selected' : ''}" data-store-id="${store.id}">
+          <span class="store-toggle-logo">${store.logo}</span>
+          <span class="store-toggle-name">${store.name}</span>
+        </button>
       `;
+    }).join('');
 
-      // Add click handler to toggle
-      storeItem.addEventListener('click', (e) => {
-        if (e.target.tagName !== 'INPUT') {
-          const checkbox = storeItem.querySelector('input');
-          checkbox.checked = !checkbox.checked;
+    selectorEl.innerHTML = `
+      <div class="store-selector-label">¿En qué tiendas busco?</div>
+      <div class="store-toggle-grid">${storeButtonsHtml}</div>
+      <button class="search-stores-btn" id="searchStoresBtn">
+        🔍 Buscar en <span id="storeCount">${this.selectedStores.length}</span> tiendas
+      </button>
+    `;
+
+    messagesContainer.appendChild(selectorEl);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // Attach toggle handlers
+    selectorEl.querySelectorAll('.store-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const storeId = btn.dataset.storeId;
+        if (this.selectedStores.includes(storeId)) {
+          this.selectedStores = this.selectedStores.filter(id => id !== storeId);
+          btn.classList.remove('selected');
+        } else {
+          this.selectedStores.push(storeId);
+          btn.classList.add('selected');
         }
-        this.toggleStore(store.id);
+        // Update count on the search button
+        const countEl = document.getElementById('storeCount');
+        if (countEl) countEl.textContent = this.selectedStores.length;
+        // Disable search button if no stores selected
+        const searchBtn = document.getElementById('searchStoresBtn');
+        if (searchBtn) searchBtn.disabled = this.selectedStores.length === 0;
       });
-
-      storeList.appendChild(storeItem);
     });
 
-    // Show modal
-    document.getElementById('storeModal').classList.remove('hidden');
-  }
-
-  toggleStore(storeId) {
-    const storeItem = document.querySelector(`.store-item[data-store-id="${storeId}"]`);
-    const checkbox = storeItem.querySelector('input');
-
-    if (checkbox.checked) {
-      storeItem.classList.add('selected');
-      if (!this.selectedStores.includes(storeId)) {
-        this.selectedStores.push(storeId);
-      }
-    } else {
-      storeItem.classList.remove('selected');
-      this.selectedStores = this.selectedStores.filter(id => id !== storeId);
-    }
-
-    // Update confirm button state
-    const confirmBtn = document.getElementById('confirmStoresBtn');
-    confirmBtn.disabled = this.selectedStores.length === 0;
-  }
-
-  selectAllStores() {
-    const availableStores = dataBunkerAPI.getAvailableStores();
-    this.selectedStores = availableStores.map(s => s.id);
-
-    // Update UI
-    document.querySelectorAll('.store-item').forEach(item => {
-      item.classList.add('selected');
-      item.querySelector('input').checked = true;
+    // Search button handler
+    document.getElementById('searchStoresBtn').addEventListener('click', async () => {
+      if (this.selectedStores.length === 0) return;
+      // Freeze the selector bubble
+      selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
+      selectorEl.style.opacity = '0.7';
+      await this.confirmStoreSelectorInChat();
     });
-
-    // Update confirm button
-    document.getElementById('confirmStoresBtn').disabled = false;
   }
 
-  async confirmStores() {
+  async confirmStoreSelectorInChat() {
     if (this.selectedStores.length === 0) {
       this.addMessage('bot', 'Por favor selecciona al menos una tienda.', true);
       return;
     }
 
-    // Save selected stores to storage
     await dataBunkerAPI.saveSelectedStores(this.selectedStores);
 
-    // Close modal
-    this.closeStoreModal();
-
-    // Add bot message showing selected stores
     const availableStores = dataBunkerAPI.getAvailableStores();
-    const selectedNames = this.selectedStores.map(id => {
-      const store = availableStores.find(s => s.id === id);
-      return store ? store.name : id;
-    }).join(', ');
+    const selectedNames = this.selectedStores
+      .map(id => availableStores.find(s => s.id === id)?.name)
+      .filter(Boolean)
+      .join(', ');
 
     this.addMessage('bot', `🏪 Buscando en: ${selectedNames}`);
-
-    // Process the search with selected stores
     await this.processPriceCheck(this.pendingSearchQuery);
-  }
-
-  closeStoreModal() {
-    document.getElementById('storeModal').classList.add('hidden');
   }
 
   clearContextData() {

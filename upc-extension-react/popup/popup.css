@@ -1098,3 +1098,95 @@ textarea:focus {
 .modal-body {
   padding: 4px;
 }
+
+/* Inline store selector in chat */
+.store-selector-message {
+  background: white !important;
+  border: 1.5px solid #30A7B5 !important;
+  padding: 14px !important;
+  max-width: 95% !important;
+}
+
+.store-selector-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #073C5C;
+  margin-bottom: 10px;
+}
+
+.store-toggle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 12px;
+}
+
+.store-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  background: #f3f4f6;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+  transition: all 0.18s ease;
+  text-align: left;
+}
+
+.store-toggle-btn:hover {
+  border-color: #30A7B5;
+  background: #f0fbfc;
+  color: #073C5C;
+}
+
+.store-toggle-btn.selected {
+  background: #e0f7fa;
+  border-color: #30A7B5;
+  color: #073C5C;
+  font-weight: 600;
+}
+
+.store-toggle-btn:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.store-toggle-logo {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.store-toggle-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-stores-btn {
+  width: 100%;
+  padding: 11px;
+  background: linear-gradient(135deg, #073C5C 0%, #30A7B5 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.search-stores-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.search-stores-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
