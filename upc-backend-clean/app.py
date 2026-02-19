@@ -2,6 +2,7 @@
 UPC Backend v5.0 - Railway Deployment
 Flask application for price checking with Oxylabs and Gemini
 Optimized for Railway healthchecks with lazy loading
+Upc o descricion
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
