@@ -81,7 +81,7 @@ body {
   transform: scale(1.05);
 }
 
-/* Action Buttons */
+/* Action Buttons - REMOVED (chatbot-only interface)
 .action-buttons {
   display: flex;
   gap: 8px;
@@ -126,6 +126,7 @@ body {
   background: #f0f9ff;
   border-color: #30A7B5;
 }
+*/
 
 /* Chat Container */
 .chat-container {

@@ -19,6 +19,7 @@ class DataBunkerPriceChecker {
     await this.loadSettings();
     this.bindEvents();
     this.checkBackendHealth();
+    this.showGreeting();
   }
 
   async loadSettings() {
@@ -60,10 +61,6 @@ class DataBunkerPriceChecker {
       }
     });
 
-    // Action buttons
-    document.getElementById('scanPageBtn').addEventListener('click', () => this.scanCurrentPage());
-    document.getElementById('screenshotBtn').addEventListener('click', () => this.captureScreenshot());
-
     // Settings
     document.getElementById('settingsBtn').addEventListener('click', () => this.openSettings());
     document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
@@ -92,16 +89,27 @@ class DataBunkerPriceChecker {
     }
   }
 
+  showGreeting() {
+    // Add greeting messages with slight delay for natural feel
+    setTimeout(() => {
+      this.addMessage('bot', '¡Hola! 👋 Soy tu asistente de precios.');
+    }, 300);
+
+    setTimeout(() => {
+      this.addMessage('bot', '¿Qué producto te gustaría buscar hoy?');
+    }, 800);
+
+    setTimeout(() => {
+      this.addMessage('bot', 'Solo escribe el nombre del producto y te mostraré los mejores precios en tus tiendas favoritas. 🛒');
+    }, 1300);
+  }
+
   async sendMessage() {
     const userInput = document.getElementById('userInput');
     const message = userInput.value.trim();
 
     if (!message && !this.currentScrapedData && !this.currentScreenshot) return;
     if (this.isProcessing) return;
-
-    // Clear welcome message if present
-    const welcomeMsg = document.querySelector('.welcome-message');
-    if (welcomeMsg) welcomeMsg.remove();
 
     // Add user message
     if (message) {
