@@ -115,6 +115,7 @@ def check_price():
         query = data.get('query', '').strip()
         upc = _clean_upc(data.get('upc', ''))
         search_type = data.get('search_type', 'shopping')
+        domains = data.get('domains', None)  # NEW: optional list of domains
 
         # Validate input
         if not query and not upc:
@@ -126,12 +127,15 @@ def check_price():
         else:
             search_query = query
 
-        logger.info(f"🔎 Processing: {search_query} (type: {search_type})")
+        if domains:
+            logger.info(f"🔎 Processing: {search_query} (type: {search_type}, domains: {len(domains)})")
+        else:
+            logger.info(f"🔎 Processing: {search_query} (type: {search_type})")
 
         # Search with Oxylabs (lazy loads service on first use)
         if search_type == 'shopping':
             oxylabs = get_oxylabs_service()
-            oxylabs_data = oxylabs.search_shopping(search_query)
+            oxylabs_data = oxylabs.search_shopping(search_query, domains=domains)
         else:
             return jsonify({'error': 'Only shopping search supported'}), 400
 

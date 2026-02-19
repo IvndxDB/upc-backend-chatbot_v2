@@ -57,12 +57,14 @@ class OxylabsService:
 
         return simplified if simplified else query
 
-    def search_shopping(self, query):
+    def search_shopping(self, query, domains=None):
         """
         Search Google Shopping via Oxylabs
 
         Args:
             query: Search query string
+            domains: List of domains to search (e.g., ['walmart.com.mx', 'amazon.com.mx'])
+                    If None, searches all .mx sites
 
         Returns:
             dict: {
@@ -79,9 +81,18 @@ class OxylabsService:
         logger.info(f"🔍 Original query: {query}")
         logger.info(f"🔍 Simplified query: {simplified_query}")
 
-        # Use Google Search (not Shopping) with site:.mx filter for Mexican stores
-        # This includes specific details like flavor (uva) and size (625ml)
-        search_query = f"{simplified_query} precio site:.mx"
+        # Build site filter based on domains
+        if domains and len(domains) > 0:
+            # Use site: operator for specific domains
+            # Format: (site:walmart.com.mx OR site:amazon.com.mx)
+            site_filter = '(' + ' OR '.join([f'site:{d}' for d in domains]) + ')'
+            search_query = f"{simplified_query} precio {site_filter}"
+            logger.info(f"🔍 Searching in {len(domains)} specific domains: {domains}")
+        else:
+            # Use Google Search with site:.mx filter for all Mexican stores
+            search_query = f"{simplified_query} precio site:.mx"
+            logger.info(f"🔍 Searching in all .mx sites")
+
         logger.info(f"🔍 Search query: {search_query}")
 
         # Use google_search with parse: True (works reliably)
@@ -204,9 +215,13 @@ class OxylabsService:
 
             logger.info(f"✅ Oxylabs returned {len(organic)} organic results")
 
-            # Filter for Mexican stores
-            filtered = self._filter_mexican_stores(organic)
-            logger.info(f"✅ After filtering: {len(filtered)} Mexican store results")
+            # Filter for Mexican stores (or specific domains if provided)
+            if domains and len(domains) > 0:
+                filtered = self._filter_by_domains(organic, domains)
+                logger.info(f"✅ After domain filtering: {len(filtered)} results from {len(domains)} domains")
+            else:
+                filtered = self._filter_mexican_stores(organic)
+                logger.info(f"✅ After filtering: {len(filtered)} Mexican store results")
 
             return {'results': filtered}
 
@@ -468,3 +483,68 @@ class OxylabsService:
         # ONLY return Mexican stores
         logger.info(f"🇲🇽 Keeping {len(mexican_results)} Mexican stores, blocked {blocked_count} non-Mexican")
         return mexican_results
+
+    def _filter_by_domains(self, results, allowed_domains):
+        """
+        Filter results to ONLY show results from specific domains
+
+        Args:
+            results: List of organic results
+            allowed_domains: List of allowed domains (e.g., ['walmart.com.mx', 'amazon.com.mx'])
+
+        Returns:
+            list: Filtered results (ONLY from allowed domains)
+        """
+        from urllib.parse import urlparse
+
+        filtered_results = []
+        blocked_count = 0
+
+        # Normalize allowed domains (remove protocol and trailing slash)
+        normalized_domains = []
+        for domain in allowed_domains:
+            # Remove protocol if present
+            domain = domain.replace('https://', '').replace('http://', '')
+            # Remove trailing slash
+            domain = domain.rstrip('/')
+            # Remove www. if present for matching
+            domain_clean = domain.replace('www.', '')
+            normalized_domains.append(domain_clean.lower())
+
+        logger.info(f"🔍 Filtering by domains: {normalized_domains}")
+
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+
+            # Get URL
+            url = item.get('url', '')
+            if not url:
+                blocked_count += 1
+                continue
+
+            # Parse domain from URL
+            try:
+                parsed = urlparse(url)
+                result_domain = parsed.netloc.lower().replace('www.', '')
+
+                # Check if result domain matches any allowed domain
+                is_allowed = any(
+                    allowed_domain in result_domain or result_domain in allowed_domain
+                    for allowed_domain in normalized_domains
+                )
+
+                if is_allowed:
+                    filtered_results.append(item)
+                    logger.info(f"✅ Keeping result from: {result_domain}")
+                else:
+                    blocked_count += 1
+                    logger.info(f"🚫 Blocking result from: {result_domain}")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Error parsing URL {url}: {e}")
+                blocked_count += 1
+                continue
+
+        logger.info(f"🎯 Filtered to {len(filtered_results)} results from {len(normalized_domains)} domains, blocked {blocked_count}")
+        return filtered_results
