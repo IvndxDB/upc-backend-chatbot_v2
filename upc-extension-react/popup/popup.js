@@ -356,16 +356,17 @@ class DataBunkerPriceChecker {
 
     // Si no hay tiendas, mostrar mensaje
     if (stores.length === 0) {
+      const displayName = product.name || (product.upc ? `Código: ${product.upc}` : 'Producto');
       resultEl.innerHTML = `
         <div class="price-result-header">
           <div class="product-info">
-            <h4>${product.name || 'Producto'}</h4>
-            ${product.upc ? `<span class="upc">UPC: ${product.upc}</span>` : ''}
+            <h4>${displayName}</h4>
+            ${product.upc && product.name ? `<span class="upc">UPC: ${product.upc}</span>` : ''}
           </div>
         </div>
         <div class="no-prices-message">
-          <p>No se encontraron precios para este producto.</p>
-          <p class="hint">Intenta con otro nombre o verifica la conexion.</p>
+          <p>No se encontraron precios en las tiendas seleccionadas.</p>
+          <p class="hint">Intenta buscar por nombre del producto o selecciona mas tiendas.</p>
         </div>
       `;
     } else {

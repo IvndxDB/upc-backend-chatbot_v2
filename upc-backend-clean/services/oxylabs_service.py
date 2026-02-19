@@ -81,8 +81,21 @@ class OxylabsService:
         logger.info(f"🔍 Original query: {query}")
         logger.info(f"🔍 Simplified query: {simplified_query}")
 
+        # Detect if this is a pure UPC/barcode query (only digits)
+        import re as _re
+        is_upc_only = bool(_re.match(r'^upc\s+\d{8,14}$', simplified_query.strip(), _re.IGNORECASE)) or \
+                      bool(_re.match(r'^\d{8,14}$', simplified_query.strip()))
+
         # Build site filter based on domains
-        if domains and len(domains) > 0:
+        if is_upc_only:
+            # For UPC queries: use just the digits + "precio" + site:.mx
+            # Then domain filtering happens in post-processing (_filter_by_domains)
+            # This is broader than site:A OR site:B OR ... which is too restrictive for barcodes
+            digits_match = _re.search(r'\d{8,14}', simplified_query)
+            upc_digits = digits_match.group(0) if digits_match else simplified_query
+            search_query = f"{upc_digits} precio site:.mx"
+            logger.info(f"🔢 UPC-only query detected: {search_query}")
+        elif domains and len(domains) > 0:
             # Use site: operator for specific domains
             # Format: (site:walmart.com.mx OR site:amazon.com.mx)
             site_filter = '(' + ' OR '.join([f'site:{d}' for d in domains]) + ')'
@@ -205,13 +218,13 @@ class OxylabsService:
                     organic = self._transform_search_results(organic)
                     logger.info(f"🔍 Transformed {len(organic)} search results to product format")
 
-            # If still no results, log structure and return error
+            # If still no results, log structure and return empty (not an error)
             if not organic:
-                logger.error(f"❌ No organic results found in any path")
-                logger.error(f"❌ Available keys in first_result: {first_result.keys()}")
+                logger.warning(f"⚠️ No organic results found in any path")
+                logger.warning(f"⚠️ Available keys in first_result: {first_result.keys()}")
                 if isinstance(content, dict):
-                    logger.error(f"❌ Available keys in content: {content.keys()}")
-                return {'error': 'No organic results found', 'results': []}
+                    logger.warning(f"⚠️ Available keys in content: {content.keys()}")
+                return {'results': []}
 
             logger.info(f"✅ Oxylabs returned {len(organic)} organic results")
 

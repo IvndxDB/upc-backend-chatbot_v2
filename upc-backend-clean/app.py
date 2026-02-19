@@ -140,20 +140,23 @@ def check_price():
         else:
             return jsonify({'error': 'Only shopping search supported'}), 400
 
-        # Check for Oxylabs errors
+        # Check for Oxylabs errors (hard failures only, not empty results)
         if 'error' in oxylabs_data and oxylabs_data['error']:
-            return jsonify({
-                'error': oxylabs_data['error'],
-                'offers': [],
-                'total_offers': 0
-            }), 500
+            error_msg = oxylabs_data['error']
+            # Treat "no results" as a soft failure — return 200 with friendly message
+            if 'not configured' in error_msg.lower() or 'timeout' in error_msg.lower() or 'http' in error_msg.lower():
+                return jsonify({
+                    'error': error_msg,
+                    'offers': [],
+                    'total_offers': 0
+                }), 500
 
         results = oxylabs_data.get('results', [])
 
         if not results:
             return jsonify({
                 'offers': [],
-                'summary': 'No results found',
+                'summary': 'No se encontraron resultados para este producto',
                 'total_offers': 0,
                 'powered_by': 'oxylabs'
             }), 200
