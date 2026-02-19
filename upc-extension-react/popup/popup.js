@@ -164,7 +164,7 @@ class DataBunkerPriceChecker {
           onComplete: (result) => {
             this.removeTypingIndicator(typingId);
             this.hideLoading();
-            this.displayPriceResult(result);
+            this.displayPriceResult(result, input);
             this.clearContextData();
           },
           onError: (error) => {
@@ -338,7 +338,7 @@ class DataBunkerPriceChecker {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
-  displayPriceResult(result) {
+  displayPriceResult(result, query = '') {
     const messagesContainer = document.getElementById('messages');
     const resultEl = document.createElement('div');
     resultEl.className = 'price-result';
@@ -448,8 +448,27 @@ class DataBunkerPriceChecker {
       `;
     }
 
+    // Add refresh button at the bottom
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'refresh-prices-btn';
+    refreshBtn.innerHTML = '🔄 Actualizar precios';
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.innerHTML = '⏳ Actualizando...';
+      await this.refreshSearch(query);
+    });
+    resultEl.appendChild(refreshBtn);
+
     messagesContainer.appendChild(resultEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  async refreshSearch(query) {
+    // Clear cache for this query then show store selector again
+    await dataBunkerAPI.clearCache();
+    this.addMessage('bot', '🗑️ Cache limpiado. ¿En qué tiendas buscamos ahora?');
+    this.pendingSearchQuery = query;
+    await this.showStoreSelectorInChat();
   }
 
   // Mantener renderPriceSource para compatibilidad con formatos antiguos

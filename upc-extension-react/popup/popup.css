@@ -1190,3 +1190,29 @@ textarea:focus {
   cursor: not-allowed;
   transform: none;
 }
+
+/* Refresh prices button inside result card */
+.refresh-prices-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px;
+  background: transparent;
+  color: #30A7B5;
+  border: 1.5px solid #30A7B5;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  text-align: center;
+}
+
+.refresh-prices-btn:hover:not(:disabled) {
+  background: #e0f7fa;
+}
+
+.refresh-prices-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
