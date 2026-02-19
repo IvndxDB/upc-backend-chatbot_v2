@@ -986,3 +986,114 @@ textarea:focus {
   width: 16px;
   height: 16px;
 }
+
+/* Store selection modal */
+.store-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.store-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.store-item:hover {
+  background: #f3f4f6;
+  border-color: #30A7B5;
+}
+
+.store-item.selected {
+  background: #e0f7fa;
+  border-color: #30A7B5;
+}
+
+.store-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #30A7B5;
+}
+
+.store-logo {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.store-info {
+  flex: 1;
+}
+
+.store-name {
+  font-weight: 600;
+  color: #073C5C;
+  font-size: 14px;
+}
+
+.store-domain {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.modal-description {
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  flex: 1;
+}
+
+.secondary-btn.small {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+}
+
+.primary-btn {
+  padding: 12px;
+  background: linear-gradient(135deg, #073C5C 0%, #30A7B5 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.primary-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(48, 167, 181, 0.3);
+}
+
+.primary-btn:active {
+  transform: translateY(0);
+}
+
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.modal-body {
+  padding: 4px;
+}

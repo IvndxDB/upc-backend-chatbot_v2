@@ -9,6 +9,8 @@ class DataBunkerPriceChecker {
     this.currentScrapedData = null;
     this.currentScreenshot = null;
     this.isProcessing = false;
+    this.pendingSearchQuery = null; // NEW: store query for store selection
+    this.selectedStores = []; // NEW: currently selected stores
 
     this.init();
   }
@@ -70,6 +72,11 @@ class DataBunkerPriceChecker {
 
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
+
+    // Store selection modal
+    document.getElementById('closeStoreModalBtn').addEventListener('click', () => this.closeStoreModal());
+    document.getElementById('selectAllStoresBtn').addEventListener('click', () => this.selectAllStores());
+    document.getElementById('confirmStoresBtn').addEventListener('click', () => this.confirmStores());
   }
 
   updateSendButton() {
@@ -106,8 +113,9 @@ class DataBunkerPriceChecker {
     userInput.style.height = 'auto';
     this.updateSendButton();
 
-    // Process the request
-    await this.processPriceCheck(message);
+    // Store query and show store selector modal
+    this.pendingSearchQuery = message;
+    await this.showStoreSelector();
   }
 
   async processPriceCheck(input) {
@@ -130,7 +138,8 @@ class DataBunkerPriceChecker {
         {
           scrapedData: this.currentScrapedData,
           screenshot: this.currentScreenshot,
-          sources
+          sources,
+          selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null
         },
         {
           onStatus: (message) => {
@@ -504,6 +513,110 @@ class DataBunkerPriceChecker {
 
   closeProductModal() {
     document.getElementById('productModal').classList.add('hidden');
+  }
+
+  async showStoreSelector() {
+    // Load available stores and selected stores from storage
+    const availableStores = dataBunkerAPI.getAvailableStores();
+    const selectedStoreIds = await dataBunkerAPI.getSelectedStores();
+    this.selectedStores = selectedStoreIds;
+
+    const storeList = document.getElementById('storeList');
+    storeList.innerHTML = '';
+
+    // Create store checkboxes
+    availableStores.forEach(store => {
+      const isSelected = selectedStoreIds.includes(store.id);
+
+      const storeItem = document.createElement('div');
+      storeItem.className = `store-item ${isSelected ? 'selected' : ''}`;
+      storeItem.dataset.storeId = store.id;
+
+      storeItem.innerHTML = `
+        <input type="checkbox" id="store-${store.id}" ${isSelected ? 'checked' : ''}>
+        <span class="store-logo">${store.logo}</span>
+        <div class="store-info">
+          <div class="store-name">${store.name}</div>
+          <div class="store-domain">${store.domain}</div>
+        </div>
+      `;
+
+      // Add click handler to toggle
+      storeItem.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'INPUT') {
+          const checkbox = storeItem.querySelector('input');
+          checkbox.checked = !checkbox.checked;
+        }
+        this.toggleStore(store.id);
+      });
+
+      storeList.appendChild(storeItem);
+    });
+
+    // Show modal
+    document.getElementById('storeModal').classList.remove('hidden');
+  }
+
+  toggleStore(storeId) {
+    const storeItem = document.querySelector(`.store-item[data-store-id="${storeId}"]`);
+    const checkbox = storeItem.querySelector('input');
+
+    if (checkbox.checked) {
+      storeItem.classList.add('selected');
+      if (!this.selectedStores.includes(storeId)) {
+        this.selectedStores.push(storeId);
+      }
+    } else {
+      storeItem.classList.remove('selected');
+      this.selectedStores = this.selectedStores.filter(id => id !== storeId);
+    }
+
+    // Update confirm button state
+    const confirmBtn = document.getElementById('confirmStoresBtn');
+    confirmBtn.disabled = this.selectedStores.length === 0;
+  }
+
+  selectAllStores() {
+    const availableStores = dataBunkerAPI.getAvailableStores();
+    this.selectedStores = availableStores.map(s => s.id);
+
+    // Update UI
+    document.querySelectorAll('.store-item').forEach(item => {
+      item.classList.add('selected');
+      item.querySelector('input').checked = true;
+    });
+
+    // Update confirm button
+    document.getElementById('confirmStoresBtn').disabled = false;
+  }
+
+  async confirmStores() {
+    if (this.selectedStores.length === 0) {
+      this.addMessage('bot', 'Por favor selecciona al menos una tienda.', true);
+      return;
+    }
+
+    // Save selected stores to storage
+    await dataBunkerAPI.saveSelectedStores(this.selectedStores);
+
+    // Close modal
+    this.closeStoreModal();
+
+    // Add bot message showing selected stores
+    const availableStores = dataBunkerAPI.getAvailableStores();
+    const selectedNames = this.selectedStores.map(id => {
+      const store = availableStores.find(s => s.id === id);
+      return store ? store.name : id;
+    }).join(', ');
+
+    this.addMessage('bot', `🏪 Buscando en: ${selectedNames}`);
+
+    // Process the search with selected stores
+    await this.processPriceCheck(this.pendingSearchQuery);
+  }
+
+  closeStoreModal() {
+    document.getElementById('storeModal').classList.add('hidden');
   }
 
   clearContextData() {

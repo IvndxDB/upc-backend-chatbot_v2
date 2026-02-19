@@ -157,6 +157,35 @@
         </div>
       </div>
     </div>
+
+    <!-- Store Selection Modal -->
+    <div id="storeModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>¿En qué tiendas buscar?</h3>
+          <button id="closeStoreModalBtn" class="icon-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-description">Selecciona las tiendas donde quieres buscar precios:</p>
+          <div id="storeList" class="store-list">
+            <!-- Stores will be inserted here -->
+          </div>
+          <div class="modal-actions">
+            <button id="selectAllStoresBtn" class="secondary-btn small">
+              Todas
+            </button>
+            <button id="confirmStoresBtn" class="primary-btn">
+              Buscar en tiendas seleccionadas
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="../utils/api.js"></script>

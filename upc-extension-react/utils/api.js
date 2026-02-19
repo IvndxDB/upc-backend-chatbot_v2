@@ -6,6 +6,50 @@
 // Backend deployado en Railway
 const DEFAULT_BACKEND_URL = 'https://upc-backend-chatbotv2-production.up.railway.app';
 
+// Available stores for price checking
+const AVAILABLE_STORES = [
+  {
+    id: 'amazon',
+    name: 'Amazon',
+    domain: 'amazon.com.mx',
+    url: 'https://www.amazon.com.mx/',
+    logo: '🛒',
+    color: '#FF9900'
+  },
+  {
+    id: 'walmart',
+    name: 'Walmart',
+    domain: 'walmart.com.mx',
+    url: 'https://www.walmart.com.mx/',
+    logo: '🏪',
+    color: '#0071CE'
+  },
+  {
+    id: 'soriana',
+    name: 'Soriana',
+    domain: 'soriana.com',
+    url: 'https://www.soriana.com/',
+    logo: '🏬',
+    color: '#E31E24'
+  },
+  {
+    id: 'chedraui',
+    name: 'Chedraui',
+    domain: 'chedraui.com.mx',
+    url: 'https://www.chedraui.com.mx/',
+    logo: '🛍️',
+    color: '#ED1C24'
+  },
+  {
+    id: 'lacomer',
+    name: 'La Comer',
+    domain: 'lacomer.com.mx',
+    url: 'https://www.lacomer.com.mx/',
+    logo: '🏪',
+    color: '#00A859'
+  }
+];
+
 class DataBunkerAPI {
   constructor() {
     this.backendUrl = DEFAULT_BACKEND_URL;
@@ -43,6 +87,41 @@ class DataBunkerAPI {
       return { ...defaults, ...result };
     } catch (error) {
       return defaults;
+    }
+  }
+
+  /**
+   * Get available stores for selection
+   */
+  getAvailableStores() {
+    return AVAILABLE_STORES;
+  }
+
+  /**
+   * Get selected stores from storage
+   */
+  async getSelectedStores() {
+    try {
+      const result = await chrome.storage.local.get(['selectedStores']);
+      // Default: all stores selected
+      if (!result.selectedStores || result.selectedStores.length === 0) {
+        return AVAILABLE_STORES.map(s => s.id);
+      }
+      return result.selectedStores;
+    } catch (error) {
+      return AVAILABLE_STORES.map(s => s.id);
+    }
+  }
+
+  /**
+   * Save selected stores to storage
+   */
+  async saveSelectedStores(storeIds) {
+    try {
+      await chrome.storage.local.set({ selectedStores: storeIds });
+      console.log('💾 Saved selected stores:', storeIds);
+    } catch (error) {
+      console.error('Error saving selected stores:', error);
     }
   }
 
@@ -229,7 +308,8 @@ class DataBunkerAPI {
       scrapedData = null,
       screenshot = null,
       sources = { gemini: true, oxylabs: true, perplexity: true },
-      forceRefresh = false // NEW: option to bypass cache
+      forceRefresh = false, // option to bypass cache
+      selectedStores = null // NEW: optional list of selected store IDs
     } = options;
 
     const {
@@ -249,6 +329,21 @@ class DataBunkerAPI {
         throw new Error('Se requiere nombre de producto o UPC');
       }
 
+      // Get selected stores (from parameter or storage)
+      let storeIds = selectedStores;
+      if (!storeIds) {
+        storeIds = await this.getSelectedStores();
+      }
+
+      // Convert store IDs to domains
+      const domains = storeIds.map(id => {
+        const store = AVAILABLE_STORES.find(s => s.id === id);
+        return store ? store.domain : null;
+      }).filter(d => d !== null);
+
+      console.log('🏪 Searching in stores:', storeIds);
+      console.log('🌐 Domains:', domains);
+
       // Check cache first (unless forceRefresh is true)
       if (!forceRefresh) {
         onStatus('Buscando en cache...');
@@ -264,7 +359,10 @@ class DataBunkerAPI {
       // Status: Starting search
       onStatus(forceRefresh ? 'Actualizando precios...' : 'Buscando producto...');
 
-      onStatus('Consultando precios en tiempo real...');
+      const storesText = storeIds.length === AVAILABLE_STORES.length
+        ? 'todas las tiendas'
+        : `${storeIds.length} tiendas`;
+      onStatus(`Consultando precios en ${storesText}...`);
 
       // Call the backend
       const response = await fetch(`${this.backendUrl}/api/check_price`, {
@@ -275,7 +373,8 @@ class DataBunkerAPI {
         body: JSON.stringify({
           query,
           upc,
-          search_type: sources.oxylabs ? 'shopping' : 'organic'
+          search_type: sources.oxylabs ? 'shopping' : 'organic',
+          domains: domains.length > 0 ? domains : null // Add domains filter
         })
       });
 
