@@ -548,7 +548,6 @@ class DataBunkerPriceChecker {
     // Create bot message bubble with store toggles
     const selectorEl = document.createElement('div');
     selectorEl.className = 'message bot store-selector-message';
-    selectorEl.id = 'store-selector-bubble';
 
     // Build the store toggle buttons
     const storeButtonsHtml = availableStores.map(store => {
@@ -564,13 +563,17 @@ class DataBunkerPriceChecker {
     selectorEl.innerHTML = `
       <div class="store-selector-label">¿En qué tiendas busco?</div>
       <div class="store-toggle-grid">${storeButtonsHtml}</div>
-      <button class="search-stores-btn" id="searchStoresBtn">
-        🔍 Buscar en <span id="storeCount">${this.selectedStores.length}</span> tiendas
+      <button class="search-stores-btn">
+        🔍 Buscar en <span class="store-count">${this.selectedStores.length}</span> tiendas
       </button>
     `;
 
     messagesContainer.appendChild(selectorEl);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // Use direct references to elements WITHIN this specific selectorEl
+    const searchBtn = selectorEl.querySelector('.search-stores-btn');
+    const countEl = selectorEl.querySelector('.store-count');
 
     // Attach toggle handlers
     selectorEl.querySelectorAll('.store-toggle-btn').forEach(btn => {
@@ -583,19 +586,15 @@ class DataBunkerPriceChecker {
           this.selectedStores.push(storeId);
           btn.classList.add('selected');
         }
-        // Update count on the search button
-        const countEl = document.getElementById('storeCount');
-        if (countEl) countEl.textContent = this.selectedStores.length;
-        // Disable search button if no stores selected
-        const searchBtn = document.getElementById('searchStoresBtn');
-        if (searchBtn) searchBtn.disabled = this.selectedStores.length === 0;
+        countEl.textContent = this.selectedStores.length;
+        searchBtn.disabled = this.selectedStores.length === 0;
       });
     });
 
-    // Search button handler
-    document.getElementById('searchStoresBtn').addEventListener('click', async () => {
+    // Search button handler - uses direct reference, not getElementById
+    searchBtn.addEventListener('click', async () => {
       if (this.selectedStores.length === 0) return;
-      // Freeze the selector bubble
+      // Freeze this specific selector bubble
       selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
       selectorEl.style.opacity = '0.7';
       await this.confirmStoreSelectorInChat();

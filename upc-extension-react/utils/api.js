@@ -322,8 +322,17 @@ class DataBunkerAPI {
 
     try {
       // Build query from input and scraped data
-      const query = input || scrapedData?.productName || scrapedData?.name || '';
-      const upc = scrapedData?.upc || '';
+      const rawInput = input || scrapedData?.productName || scrapedData?.name || '';
+
+      // Detect if input is a barcode: 8-14 digits (EAN-8, UPC-A, EAN-13, ITF-14)
+      const isBarcode = /^\d{8,14}$/.test(rawInput.trim());
+
+      const query = isBarcode ? '' : rawInput;
+      const upc = isBarcode ? rawInput.trim() : (scrapedData?.upc || '');
+
+      if (isBarcode) {
+        console.log('🔢 Detected barcode input:', upc);
+      }
 
       if (!query && !upc) {
         throw new Error('Se requiere nombre de producto o UPC');
