@@ -88,13 +88,13 @@ class OxylabsService:
 
         # Build site filter based on domains
         if is_upc_only:
-            # For UPC queries: use just the digits + "precio" + site:.mx
-            # Then domain filtering happens in post-processing (_filter_by_domains)
-            # This is broader than site:A OR site:B OR ... which is too restrictive for barcodes
+            # For UPC/barcode: search without site: filter
+            # domain: 'com.mx' in payload already localizes to Mexico
+            # site:.mx was causing 0 results; plain query matches what Google browser returns
             digits_match = _re.search(r'\d{8,14}', simplified_query)
             upc_digits = digits_match.group(0) if digits_match else simplified_query
-            search_query = f"{upc_digits} precio site:.mx"
-            logger.info(f"🔢 UPC-only query detected: {search_query}")
+            search_query = f"{upc_digits} precio"
+            logger.info(f"🔢 UPC-only query: {search_query}")
         elif domains and len(domains) > 0:
             # Use site: operator for specific domains
             # Format: (site:walmart.com.mx OR site:amazon.com.mx)
@@ -232,6 +232,11 @@ class OxylabsService:
             if domains and len(domains) > 0:
                 filtered = self._filter_by_domains(organic, domains)
                 logger.info(f"✅ After domain filtering: {len(filtered)} results from {len(domains)} domains")
+                # Fallback: if none of the selected stores have the product, show all Mexican stores
+                if not filtered:
+                    logger.warning(f"⚠️ No results from selected domains, falling back to all Mexican stores")
+                    filtered = self._filter_mexican_stores(organic)
+                    logger.info(f"⚠️ Fallback: {len(filtered)} Mexican store results")
             else:
                 filtered = self._filter_mexican_stores(organic)
                 logger.info(f"✅ After filtering: {len(filtered)} Mexican store results")
