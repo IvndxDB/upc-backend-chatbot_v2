@@ -7,7 +7,7 @@
 console.log('🚀 DataBunker Service Worker starting...');
 
 // Default backend URL (deployed on Railway)
-const DEFAULT_BACKEND_URL = 'https://upc-backend-chatbotv2-production.up.railway.app';
+const DEFAULT_BACKEND_URL = 'https://backend-addon-production.up.railway.app';
 
 // Keep service worker alive
 self.addEventListener('activate', () => {

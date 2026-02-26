@@ -4,7 +4,7 @@
  */
 
 // Backend deployado en Railway
-const DEFAULT_BACKEND_URL = 'https://upc-backend-chatbotv2-production.up.railway.app';
+const DEFAULT_BACKEND_URL = 'https://backend-addon-production.up.railway.app';
 
 // Available stores for price checking
 const AVAILABLE_STORES = [
