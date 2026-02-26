@@ -414,6 +414,13 @@ body {
   color: #073C5C;
 }
 
+.no-price-label {
+  font-size: 12px;
+  color: #30A7B5;
+  font-weight: 600;
+  font-style: italic;
+}
+
 .store-link {
   display: inline-flex;
   align-items: center;

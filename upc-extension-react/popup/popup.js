@@ -373,9 +373,9 @@ class DataBunkerPriceChecker {
       // Generar HTML para precios reales
       const realStoresHtml = realPrices.map((store) => {
         const isLowest = lowest && store.store === lowest.store && !lowest.estimated;
-        const priceFormatted = typeof store.price === 'number'
-          ? `$${store.price.toFixed(2)} MXN`
-          : store.price;
+        const priceFormatted = store.price != null
+          ? `$${typeof store.price === 'number' ? store.price.toFixed(2) : store.price} MXN`
+          : '<span class="no-price-label">Ver precio →</span>';
 
         // Make entire card clickable if URL exists (use data-url, no inline onclick for CSP)
         const cardClass = `store-price-item ${isLowest ? 'lowest' : ''} ${store.url ? 'clickable' : ''}`;
@@ -396,20 +396,22 @@ class DataBunkerPriceChecker {
         `;
       }).join('');
 
-      // Generar HTML para precios estimados
+      // Generar HTML para precios estimados (o sin precio disponible)
       const estimatedStoresHtml = estimatedPrices.map((store) => {
-        const priceFormatted = typeof store.price === 'number'
-          ? `$${store.price.toFixed(2)} MXN`
-          : store.price;
+        const hasPrice = store.price != null;
+        const priceFormatted = hasPrice
+          ? `~$${typeof store.price === 'number' ? store.price.toFixed(2) : store.price} MXN`
+          : '<span class="no-price-label">Ver precio →</span>';
 
         return `
-          <div class="store-price-item estimated">
+          <div class="store-price-item estimated ${store.url ? 'clickable' : ''}" ${store.url ? `data-url="${store.url}"` : ''} style="${store.url ? 'cursor:pointer;' : ''}">
             <div class="store-info">
               <span class="store-name">${store.store}</span>
-              <span class="estimated-badge">Estimado</span>
+              <span class="estimated-badge">${hasPrice ? 'Estimado' : 'Sin precio'}</span>
             </div>
             <div class="store-price-value estimated-price">
-              ~${priceFormatted}
+              ${priceFormatted}
+              ${store.url ? '<span class="store-link">🔗</span>' : ''}
             </div>
           </div>
         `;

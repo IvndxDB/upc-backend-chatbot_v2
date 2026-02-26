@@ -410,17 +410,18 @@ class DataBunkerAPI {
       if (data.offers && Array.isArray(data.offers)) {
         result.stores = data.offers.map(offer => ({
           store: offer.seller || offer.store || 'Tienda desconocida',
-          price: offer.price || 0,
+          price: offer.price != null ? offer.price : null,
           url: offer.link || offer.url || '',
           source_api: offer.source || 'oxylabs',
-          estimated: false
+          estimated: offer.estimated || false
         }));
 
         result.count = result.stores.length;
 
-        // Find lowest price
-        if (result.stores.length > 0) {
-          result.lowest = result.stores.reduce((min, store) =>
+        // Find lowest price (only among stores with a real price)
+        const priced = result.stores.filter(s => s.price != null && !s.estimated);
+        if (priced.length > 0) {
+          result.lowest = priced.reduce((min, store) =>
             store.price < min.price ? store : min
           );
         }

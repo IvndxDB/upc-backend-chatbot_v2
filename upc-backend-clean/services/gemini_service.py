@@ -185,29 +185,31 @@ Retorna SOLO JSON válido en este formato:
                 logger.info(f"⚠️ Skipping duplicate seller: {seller}")
                 continue
 
-            # Extract price
-            raw_price = item.get('price', '')
-            price = self._normalize_price(raw_price)
-            if not price:
-                logger.info(f"⚠️ Skipping {seller} - no valid price (raw: '{raw_price}')")
-                continue
-
             # Extract link - try multiple fields
             link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
             if not link or not link.startswith('http'):
                 logger.info(f"⚠️ Skipping {seller} - invalid link (link: '{link[:50] if link else 'EMPTY'}')")
                 continue
 
+            # Extract price (optional - include result even without price)
+            raw_price = item.get('price', '')
+            price = self._normalize_price(raw_price)
+            has_price = bool(price)
+
+            if not has_price:
+                logger.info(f"⚠️ No price for {seller} - including with link only")
+
             seen_sellers.add(seller)
-            logger.info(f"✅ Added offer from {seller}: ${price} - {link[:60]}...")
+            logger.info(f"✅ Added offer from {seller}: {'$' + str(price) if has_price else 'sin precio'} - {link[:60]}...")
 
             offers.append({
                 'title': item.get('title', 'Unknown Product'),
-                'price': price,
+                'price': price if has_price else None,
                 'currency': 'MXN',
                 'seller': seller,
                 'link': link,
-                'source': 'oxylabs_shopping'
+                'source': 'oxylabs_shopping',
+                'estimated': not has_price  # mark as estimated if no price found
             })
 
         return {
