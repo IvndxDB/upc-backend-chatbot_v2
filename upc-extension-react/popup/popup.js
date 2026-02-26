@@ -386,7 +386,6 @@ class DataBunkerPriceChecker {
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               ${isLowest ? '<span class="lowest-badge">Mejor precio</span>' : ''}
-              ${store.source_api ? `<span class="api-source">${store.source_api}</span>` : ''}
             </div>
             <div class="store-price-value">
               ${priceFormatted}
@@ -407,7 +406,7 @@ class DataBunkerPriceChecker {
           <div class="store-price-item estimated ${store.url ? 'clickable' : ''}" ${store.url ? `data-url="${store.url}"` : ''} style="${store.url ? 'cursor:pointer;' : ''}">
             <div class="store-info">
               <span class="store-name">${store.store}</span>
-              <span class="estimated-badge">${hasPrice ? 'Estimado' : 'Sin precio'}</span>
+              <span class="estimated-badge">${hasPrice ? 'Estimado' : 'Precio no disponible'}</span>
             </div>
             <div class="store-price-value estimated-price">
               ${priceFormatted}
