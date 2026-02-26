@@ -47,6 +47,38 @@ const AVAILABLE_STORES = [
     url: 'https://www.lacomer.com.mx/',
     logo: '🏪',
     color: '#00A859'
+  },
+  {
+    id: 'fahorro',
+    name: 'Fahorro',
+    domain: 'fahorro.com',
+    url: 'https://www.fahorro.com/',
+    logo: '💊',
+    color: '#0066CC'
+  },
+  {
+    id: 'farmaciasanpablo',
+    name: 'San Pablo',
+    domain: 'farmaciasanpablo.com.mx',
+    url: 'https://www.farmaciasanpablo.com.mx/',
+    logo: '💊',
+    color: '#E31E24'
+  },
+  {
+    id: 'benavides',
+    name: 'Benavides',
+    domain: 'benavides.com.mx',
+    url: 'https://www.benavides.com.mx/',
+    logo: '💊',
+    color: '#007DC5'
+  },
+  {
+    id: 'farmaciasguadalajara',
+    name: 'Gdl Farmacias',
+    domain: 'farmaciasguadalajara.com',
+    url: 'https://www.farmaciasguadalajara.com/',
+    logo: '💊',
+    color: '#C8102E'
   }
 ];
 

@@ -453,6 +453,7 @@ class OxylabsService:
             'liverpool', 'palacio de hierro', 'coppel',
             'elektra', 'sanborns', '7-eleven', 'oxxo',
             'farmacias guadalajara', 'farmacia del ahorro', 'benavides',
+            'fahorro', 'farmacias san pablo', 'san pablo',
             'fresko', 'city club', 'smart', 'alsuper'
         }
 
