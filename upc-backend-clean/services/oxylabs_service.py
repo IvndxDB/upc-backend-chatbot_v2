@@ -546,9 +546,12 @@ class OxylabsService:
                 parsed = urlparse(url)
                 result_domain = parsed.netloc.lower().replace('www.', '')
 
-                # Check if result domain matches any allowed domain
+                # Strict domain match: exact or subdomain only
+                # e.g. "walmart.com.mx" matches "walmart.com.mx" ✓
+                #      "walmart.com" does NOT match "walmart.com.mx" ✓ (fixes US links)
                 is_allowed = any(
-                    allowed_domain in result_domain or result_domain in allowed_domain
+                    result_domain == allowed_domain or
+                    result_domain.endswith('.' + allowed_domain)
                     for allowed_domain in normalized_domains
                 )
 
