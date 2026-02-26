@@ -377,12 +377,12 @@ class DataBunkerPriceChecker {
           ? `$${store.price.toFixed(2)} MXN`
           : store.price;
 
-        // Make entire card clickable if URL exists
+        // Make entire card clickable if URL exists (use data-url, no inline onclick for CSP)
         const cardClass = `store-price-item ${isLowest ? 'lowest' : ''} ${store.url ? 'clickable' : ''}`;
-        const onClick = store.url ? `onclick="window.open('${store.url}', '_blank')"` : '';
+        const dataUrl = store.url ? `data-url="${store.url}"` : '';
 
         return `
-          <div class="${cardClass}" ${onClick} style="${store.url ? 'cursor: pointer;' : ''}">
+          <div class="${cardClass}" ${dataUrl} style="${store.url ? 'cursor: pointer;' : ''}">
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               ${isLowest ? '<span class="lowest-badge">Mejor precio</span>' : ''}
@@ -448,6 +448,14 @@ class DataBunkerPriceChecker {
         ` : ''}
       `;
     }
+
+    // Open store links via chrome.tabs.create (window.open blocked by CSP in extensions)
+    resultEl.addEventListener('click', (e) => {
+      const card = e.target.closest('.store-price-item.clickable');
+      if (card && card.dataset.url) {
+        chrome.tabs.create({ url: card.dataset.url });
+      }
+    });
 
     // Add refresh button at the bottom
     const refreshBtn = document.createElement('button');
