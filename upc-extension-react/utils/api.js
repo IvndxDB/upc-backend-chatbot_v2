@@ -462,7 +462,7 @@ class DataBunkerAPI {
    */
   async healthCheck() {
     try {
-      const response = await fetch(`${this.backendUrl}/api/health`);
+      const response = await fetch(`${this.backendUrl}/health`);
       return response.ok;
     } catch (error) {
       return false;

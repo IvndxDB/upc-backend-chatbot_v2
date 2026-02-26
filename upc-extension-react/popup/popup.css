@@ -17,7 +17,7 @@ body {
   color: #1a1a2e;
   background: linear-gradient(135deg, #062341 0%, #073C5C 50%, #30A7B5 100%);
   width: 450px;
-  height: 650px;
+  height: 580px;
   margin: 0;
   padding: 0;
 }
@@ -25,7 +25,7 @@ body {
 .container {
   display: flex;
   flex-direction: column;
-  height: 650px;
+  height: 580px;
   background: #ffffff;
   border-radius: 8px;
   overflow: hidden;
