@@ -16,8 +16,8 @@ body {
   line-height: 1.5;
   color: #1a1a2e;
   background: linear-gradient(135deg, #062341 0%, #073C5C 50%, #30A7B5 100%);
-  width: 450px;
-  height: 580px;
+  width: 100%;
+  height: 100vh;
   margin: 0;
   padding: 0;
 }
@@ -25,9 +25,9 @@ body {
 .container {
   display: flex;
   flex-direction: column;
-  height: 580px;
+  height: 100vh;
   background: #ffffff;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   position: relative;
 }

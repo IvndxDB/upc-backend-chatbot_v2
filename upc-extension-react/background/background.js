@@ -17,6 +17,9 @@ self.addEventListener('activate', () => {
 // Log when service worker is ready
 console.log('✨ Service Worker loaded successfully');
 
+// Open side panel when toolbar icon is clicked
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
+
 // Initialize extension on install
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('DataBunker Price Checker installed:', details.reason);
