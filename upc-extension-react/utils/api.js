@@ -107,6 +107,11 @@ async function _loadDictionary() {
   }
 }
 
+async function dictionaryLookupByUPC(upc) {
+  const items = await _loadDictionary();
+  return items.find(item => item.UPC === upc) || null;
+}
+
 async function fuzzySearch(query, maxResults = 5) {
   const items = await _loadDictionary();
   const normQuery = _normStr(query);

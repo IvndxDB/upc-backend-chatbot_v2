@@ -123,15 +123,18 @@ def check_price():
             return jsonify({'error': 'query or upc required'}), 400
 
         # Build search query
+        # When UPC is available, use it as primary search (more precise for Google)
+        # Product name (query) is kept for display only
         if upc:
-            search_query = f"{query} UPC {upc}" if query else f"UPC {upc}"
+            search_query = f"UPC {upc}"
         else:
             search_query = query
 
+        display = query if query else f"UPC {upc}"
         if domains:
-            logger.info(f"🔎 Processing: {search_query} (type: {search_type}, domains: {len(domains)})")
+            logger.info(f"🔎 Processing: {display} → oxylabs: {search_query} (domains: {len(domains)})")
         else:
-            logger.info(f"🔎 Processing: {search_query} (type: {search_type})")
+            logger.info(f"🔎 Processing: {display} → oxylabs: {search_query}")
 
         # Search with Oxylabs (lazy loads service on first use)
         if search_type == 'shopping':

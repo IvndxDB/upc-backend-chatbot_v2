@@ -117,18 +117,31 @@ class DataBunkerPriceChecker {
     userInput.style.height = 'auto';
     this.updateSendButton();
 
-    // Check if barcode (skip fuzzy for barcodes)
     const isBarcode = /^\d{8,14}$/.test(message.trim());
 
-    if (!isBarcode && message) {
-      const matches = await fuzzySearch(message);
-      if (matches.length > 0) {
-        await this.showFuzzyResultsInChat(matches, message);
-        return;
+    if (isBarcode) {
+      // Look up barcode in local dictionary
+      const found = await dictionaryLookupByUPC(message.trim());
+      if (found) {
+        this.addMessage('bot', `📦 ${found.Item}`);
+        this.pendingSearchQuery = found.Item;
+        this.pendingUPC = found.UPC;
+      } else {
+        this.pendingSearchQuery = '';
+        this.pendingUPC = message.trim();
       }
+      await this.showStoreSelectorInChat();
+      return;
     }
 
-    // No fuzzy matches (or barcode) → go straight to store selector
+    // Text query → fuzzy search in dictionary
+    const matches = await fuzzySearch(message);
+    if (matches.length > 0) {
+      await this.showFuzzyResultsInChat(matches, message);
+      return;
+    }
+
+    // No fuzzy matches → go straight to store selector with original input
     this.pendingSearchQuery = message;
     await this.showStoreSelectorInChat();
   }
