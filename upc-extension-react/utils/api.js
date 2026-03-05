@@ -82,6 +82,56 @@ const AVAILABLE_STORES = [
   }
 ];
 
+// --- Fuzzy Search (local dictionary) ---
+
+let _dictionary = null;
+
+function _normStr(str) {
+  return str.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function _loadDictionary() {
+  if (_dictionary) return _dictionary;
+  try {
+    const url = chrome.runtime.getURL('diccionario_ext.json');
+    const res = await fetch(url);
+    _dictionary = await res.json();
+    return _dictionary;
+  } catch (e) {
+    console.error('Failed to load dictionary:', e);
+    return [];
+  }
+}
+
+async function fuzzySearch(query, maxResults = 5) {
+  const items = await _loadDictionary();
+  const normQuery = _normStr(query);
+  const queryWords = normQuery.split(' ').filter(w => w.length > 2);
+  if (queryWords.length === 0) return [];
+
+  const scored = [];
+  for (const item of items) {
+    const normItem = _normStr(item.Item);
+    let matchCount = 0;
+    for (const word of queryWords) {
+      if (normItem.includes(word)) matchCount++;
+    }
+    if (matchCount > 0) {
+      scored.push({ ...item, _score: matchCount / queryWords.length });
+    }
+  }
+
+  // Sort: highest score first, then shorter name (more specific)
+  scored.sort((a, b) => b._score - a._score || a.Item.length - b.Item.length);
+  return scored.slice(0, maxResults);
+}
+
+// ----------------------------------------
+
 class DataBunkerAPI {
   constructor() {
     this.backendUrl = DEFAULT_BACKEND_URL;

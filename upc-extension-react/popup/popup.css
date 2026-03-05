@@ -1106,6 +1106,76 @@ textarea:focus {
   padding: 4px;
 }
 
+/* Fuzzy search results */
+.fuzzy-results-message {
+  align-self: flex-start;
+  max-width: 95%;
+  width: 95%;
+}
+
+.fuzzy-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fuzzy-option-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  background: white;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.fuzzy-option-btn:hover:not(:disabled) {
+  border-color: #30A7B5;
+  background: #f0fdfe;
+}
+
+.fuzzy-option-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fuzzy-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #073C5C;
+  line-height: 1.4;
+}
+
+.fuzzy-item-upc {
+  font-size: 10px;
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.fuzzy-skip-btn {
+  border-style: dashed;
+  border-color: #d1d5db;
+  color: #6b7280;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.fuzzy-skip-btn em {
+  color: #073C5C;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.fuzzy-skip-btn:hover:not(:disabled) {
+  border-color: #9ca3af;
+  background: #f9fafb;
+}
+
 /* Inline store selector in chat */
 .store-selector-message {
   background: white !important;

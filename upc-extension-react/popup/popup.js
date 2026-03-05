@@ -117,9 +117,67 @@ class DataBunkerPriceChecker {
     userInput.style.height = 'auto';
     this.updateSendButton();
 
-    // Store query and show store selector inline in chat
+    // Check if barcode (skip fuzzy for barcodes)
+    const isBarcode = /^\d{8,14}$/.test(message.trim());
+
+    if (!isBarcode && message) {
+      const matches = await fuzzySearch(message);
+      if (matches.length > 0) {
+        await this.showFuzzyResultsInChat(matches, message);
+        return;
+      }
+    }
+
+    // No fuzzy matches (or barcode) → go straight to store selector
     this.pendingSearchQuery = message;
     await this.showStoreSelectorInChat();
+  }
+
+  async showFuzzyResultsInChat(matches, originalInput) {
+    const messagesContainer = document.getElementById('messages');
+    this.addMessage('bot', '🔍 Encontré estos productos en el catálogo. ¿Cuál buscas?');
+
+    const selectorEl = document.createElement('div');
+    selectorEl.className = 'fuzzy-results-message';
+
+    const matchesHtml = matches.map((m, i) => `
+      <button class="fuzzy-option-btn" data-index="${i}">
+        <span class="fuzzy-item-name">${m.Item}</span>
+        ${m.UPC ? `<span class="fuzzy-item-upc">${m.UPC}</span>` : ''}
+      </button>
+    `).join('');
+
+    selectorEl.innerHTML = `
+      <div class="fuzzy-options">
+        ${matchesHtml}
+        <button class="fuzzy-option-btn fuzzy-skip-btn">
+          🔎 Buscar "<em>${originalInput}</em>" tal como está
+        </button>
+      </div>
+    `;
+
+    messagesContainer.appendChild(selectorEl);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // Handle button clicks
+    selectorEl.querySelectorAll('.fuzzy-option-btn').forEach((btn, i) => {
+      btn.addEventListener('click', async () => {
+        selectorEl.querySelectorAll('.fuzzy-option-btn').forEach(b => b.disabled = true);
+
+        if (btn.classList.contains('fuzzy-skip-btn')) {
+          this.addMessage('user', originalInput);
+          this.pendingSearchQuery = originalInput;
+          this.pendingUPC = null;
+        } else {
+          const match = matches[i];
+          this.addMessage('user', match.Item);
+          this.pendingSearchQuery = match.Item;
+          this.pendingUPC = match.UPC || null;
+        }
+
+        await this.showStoreSelectorInChat();
+      });
+    });
   }
 
   async processPriceCheck(input) {
@@ -137,10 +195,16 @@ class DataBunkerPriceChecker {
     const typingId = this.addTypingIndicator();
 
     try {
+      // If fuzzy match provided a UPC, merge it into scrapedData
+      const scrapedData = this.pendingUPC
+        ? { ...(this.currentScrapedData || {}), upc: this.pendingUPC }
+        : this.currentScrapedData;
+      this.pendingUPC = null; // consume it
+
       await dataBunkerAPI.streamPriceCheck(
         input,
         {
-          scrapedData: this.currentScrapedData,
+          scrapedData,
           screenshot: this.currentScreenshot,
           sources,
           selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null
