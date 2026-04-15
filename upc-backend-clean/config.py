@@ -26,6 +26,10 @@ class Config:
     VERSION = "5.0.0"
     PLATFORM = "Railway"
 
+    # User authentication via API keys (comma-separated in env var)
+    API_KEYS = [k.strip() for k in os.environ.get('API_KEYS', '').split(',') if k.strip()]
+    API_KEY_REQUIRED = bool(API_KEYS)  # False in dev mode (no env var set)
+
     @classmethod
     def validate(cls):
         """
@@ -59,5 +63,7 @@ class Config:
             "PORT": cls.PORT,
             "DEBUG": cls.DEBUG,
             "VERSION": cls.VERSION,
-            "PLATFORM": cls.PLATFORM
+            "PLATFORM": cls.PLATFORM,
+            "API_KEY_REQUIRED": cls.API_KEY_REQUIRED,
+            "API_KEYS_COUNT": len(cls.API_KEYS)
         }

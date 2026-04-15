@@ -7,7 +7,6 @@
     "activeTab",
     "scripting",
     "storage",
-    "tabs",
     "sidePanel",
     "contextMenus"
   ],
@@ -45,7 +44,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/*"],
+      "resources": ["icons/*", "diccionario_ext.json"],
       "matches": ["<all_urls>"]
     }
   ]
