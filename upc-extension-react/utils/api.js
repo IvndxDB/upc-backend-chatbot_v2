@@ -3,8 +3,8 @@
  * Handles all communication with the backend
  */
 
-// Backend deployado en Railway
-const DEFAULT_BACKEND_URL = 'https://backend-addon-production.up.railway.app';
+// Backend deployado en ECS (AWS)
+const DEFAULT_BACKEND_URL = 'https://ad-31f94a5c9e704a6aa20e418f24a02b92.ecs.us-east-1.on.aws';
 
 // Available stores for price checking
 const AVAILABLE_STORES = [
@@ -99,7 +99,12 @@ async function _loadDictionary() {
   try {
     const url = chrome.runtime.getURL('diccionario_ext.json');
     const res = await fetch(url);
+    if (!res.ok) {
+      console.error('Dictionary fetch failed:', res.status, url);
+      return [];
+    }
     _dictionary = await res.json();
+    console.log('📖 Dictionary loaded:', _dictionary.length, 'items');
     return _dictionary;
   } catch (e) {
     console.error('Failed to load dictionary:', e);
@@ -152,6 +157,47 @@ class DataBunkerAPI {
     } catch (error) {
       console.log('Using default backend URL');
     }
+  }
+
+  // --- API Key Management ---
+
+  async getApiKey() {
+    try {
+      const data = await chrome.storage.local.get(['apiKey']);
+      return data.apiKey || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async saveApiKey(key) {
+    await chrome.storage.local.set({ apiKey: key });
+  }
+
+  async clearApiKey() {
+    await chrome.storage.local.remove(['apiKey']);
+  }
+
+  async validateApiKey(key) {
+    try {
+      const response = await fetch(`${this.backendUrl}/api/validate-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key })
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      return data.valid === true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async _authHeaders() {
+    const key = await this.getApiKey();
+    const headers = { 'Content-Type': 'application/json' };
+    if (key) headers['X-API-Key'] = key;
+    return headers;
   }
 
   async saveSettings(settings) {
@@ -463,17 +509,18 @@ class DataBunkerAPI {
       // Call the backend
       const response = await fetch(`${this.backendUrl}/api/check_price`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: await this._authHeaders(),
         body: JSON.stringify({
           query,
           upc,
           search_type: sources.oxylabs ? 'shopping' : 'organic',
-          domains: domains.length > 0 ? domains : null // Add domains filter
+          domains: domains.length > 0 ? domains : null
         })
       });
 
+      if (response.status === 401) {
+        throw new Error('Clave de acceso inválida. Por favor recarga la extensión e ingresa tu clave.');
+      }
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Error del servidor: ${response.status} - ${errorText}`);

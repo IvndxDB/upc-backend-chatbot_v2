@@ -171,24 +171,30 @@ Retorna SOLO JSON válido en este formato:
                 logger.warning(f"⚠️ Skipping non-dict item: {type(item)}")
                 continue
 
-            # Extract merchant/seller
+            # Extract link - try multiple fields
+            link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
+            if not link or not link.startswith('http'):
+                logger.info(f"⚠️ Skipping item - invalid link")
+                continue
+
+            # Extract merchant/seller — google_search has no merchant field, derive from URL
             merchant = item.get('merchant', {})
-            if isinstance(merchant, dict):
-                seller = merchant.get('name', 'Unknown')
-            elif isinstance(merchant, str):
+            if isinstance(merchant, dict) and merchant.get('name'):
+                seller = merchant['name']
+            elif isinstance(merchant, str) and merchant:
                 seller = merchant
             else:
-                seller = 'Unknown'
+                # Derive seller name from domain (e.g. walmart.com.mx → Walmart)
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(link).netloc.lower().replace('www.', '')
+                    seller = domain.split('.')[0].capitalize()
+                except Exception:
+                    seller = 'Unknown'
 
             # Deduplicate by seller
             if seller in seen_sellers:
                 logger.info(f"⚠️ Skipping duplicate seller: {seller}")
-                continue
-
-            # Extract link - try multiple fields
-            link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
-            if not link or not link.startswith('http'):
-                logger.info(f"⚠️ Skipping {seller} - invalid link (link: '{link[:50] if link else 'EMPTY'}')")
                 continue
 
             # Extract price (optional - include result even without price)

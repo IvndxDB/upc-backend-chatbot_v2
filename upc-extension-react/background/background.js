@@ -6,8 +6,8 @@
 // Log service worker initialization
 console.log('🚀 DataBunker Service Worker starting...');
 
-// Default backend URL (deployed on Railway)
-const DEFAULT_BACKEND_URL = 'https://backend-addon-production.up.railway.app';
+// Default backend URL (deployed on ECS - AWS)
+const DEFAULT_BACKEND_URL = 'https://ad-31f94a5c9e704a6aa20e418f24a02b92.ecs.us-east-1.on.aws';
 
 // Keep service worker alive
 self.addEventListener('activate', () => {

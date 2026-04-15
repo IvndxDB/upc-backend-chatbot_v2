@@ -1,0 +1,31 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Environment variables (secrets)
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# Railway-specific (not needed in Docker)
+railway.toml
+Procfile
+runtime.txt
+
+# Docs
+*.md
+README*
+
+# Docker itself
+Dockerfile
+.dockerignore

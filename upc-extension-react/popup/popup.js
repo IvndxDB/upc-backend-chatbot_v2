@@ -16,18 +16,56 @@ class DataBunkerPriceChecker {
   }
 
   async init() {
-    await this.loadSettings();
+    const key = await dataBunkerAPI.getApiKey();
+    if (!key) {
+      this.showActivationScreen();
+      return;
+    }
     this.bindEvents();
     this.checkBackendHealth();
     this.showGreeting();
   }
 
-  async loadSettings() {
-    const settings = await dataBunkerAPI.getSettings();
-    document.getElementById('backendUrl').value = settings.backendUrl || '';
-    document.getElementById('useGemini').checked = settings.useGemini !== false;
-    document.getElementById('useOxylabs').checked = settings.useOxylabs !== false;
-    document.getElementById('usePerplexity').checked = settings.usePerplexity !== false;
+  showActivationScreen() {
+    document.getElementById('activationScreen').classList.remove('hidden');
+    const input = document.getElementById('apiKeyInput');
+    const btn = document.getElementById('activateBtn');
+
+    input.addEventListener('input', () => {
+      btn.disabled = !input.value.trim();
+    });
+    btn.addEventListener('click', () => this.handleActivation());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !btn.disabled) this.handleActivation();
+    });
+  }
+
+  async handleActivation() {
+    const input = document.getElementById('apiKeyInput');
+    const btn = document.getElementById('activateBtn');
+    const key = input.value.trim();
+    if (!key) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Validando...';
+
+    const valid = await dataBunkerAPI.validateApiKey(key);
+    if (valid) {
+      await dataBunkerAPI.saveApiKey(key);
+      document.getElementById('activationScreen').classList.add('hidden');
+      this.bindEvents();
+      this.checkBackendHealth();
+      this.showGreeting();
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Activar';
+      const existing = document.querySelector('.activation-error');
+      if (existing) existing.remove();
+      const err = document.createElement('p');
+      err.className = 'activation-error';
+      err.textContent = '❌ Clave inválida. Verifica con el administrador.';
+      document.querySelector('.activation-input-wrapper').after(err);
+    }
   }
 
   bindEvents() {
@@ -49,23 +87,6 @@ class DataBunkerPriceChecker {
       userInput.style.height = 'auto';
       userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
     });
-
-    // Paste button
-    document.getElementById('pasteBtn').addEventListener('click', async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        userInput.value = text;
-        userInput.dispatchEvent(new Event('input'));
-      } catch (err) {
-        console.error('Failed to paste:', err);
-      }
-    });
-
-    // Settings
-    document.getElementById('settingsBtn').addEventListener('click', () => this.openSettings());
-    document.getElementById('closeSettingsBtn').addEventListener('click', () => this.closeSettings());
-    document.getElementById('saveSettingsBtn').addEventListener('click', () => this.saveSettings());
-    document.getElementById('clearCacheBtn').addEventListener('click', () => this.clearCache());
 
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
@@ -170,7 +191,7 @@ class DataBunkerPriceChecker {
     `;
 
     messagesContainer.appendChild(selectorEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
 
     // Handle button clicks
     selectorEl.querySelectorAll('.fuzzy-option-btn').forEach((btn, i) => {
@@ -351,7 +372,7 @@ class DataBunkerPriceChecker {
     messageEl.className = `message ${type}${isError ? ' error' : ''}`;
     messageEl.textContent = content;
     messagesContainer.appendChild(messageEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
 
     this.messages.push({ type, content, timestamp: Date.now() });
     return messageEl;
@@ -364,7 +385,7 @@ class DataBunkerPriceChecker {
     typingEl.id = 'typing-' + Date.now();
     typingEl.innerHTML = '<span></span><span></span><span></span>';
     messagesContainer.appendChild(typingEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
     return typingEl.id;
   }
 
@@ -393,7 +414,7 @@ class DataBunkerPriceChecker {
       </p>
     `;
     messagesContainer.appendChild(previewEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
   }
 
   addScreenshotPreview(dataUrl) {
@@ -412,7 +433,7 @@ class DataBunkerPriceChecker {
       <img src="${dataUrl}" alt="Screenshot">
     `;
     messagesContainer.appendChild(previewEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
   }
 
   displayPriceResult(result, query = '') {
@@ -531,7 +552,7 @@ class DataBunkerPriceChecker {
     resultEl.addEventListener('click', (e) => {
       const card = e.target.closest('.store-price-item.clickable');
       if (card && card.dataset.url) {
-        chrome.tabs.create({ url: card.dataset.url });
+        window.open(card.dataset.url, '_blank');
       }
     });
 
@@ -547,7 +568,7 @@ class DataBunkerPriceChecker {
     resultEl.appendChild(refreshBtn);
 
     messagesContainer.appendChild(resultEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
   }
 
   async refreshSearch(query) {
@@ -656,7 +677,7 @@ class DataBunkerPriceChecker {
     `;
 
     messagesContainer.appendChild(selectorEl);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    this.scrollToBottom();
 
     // Use direct references to elements WITHIN this specific selectorEl
     const searchBtn = selectorEl.querySelector('.search-stores-btn');
@@ -706,6 +727,11 @@ class DataBunkerPriceChecker {
     await this.processPriceCheck(this.pendingSearchQuery);
   }
 
+  scrollToBottom() {
+    const chatContainer = document.querySelector('.chat-container');
+    if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
   clearContextData() {
     this.currentScrapedData = null;
     this.currentScreenshot = null;
@@ -724,42 +750,6 @@ class DataBunkerPriceChecker {
     document.getElementById('loadingOverlay').classList.add('hidden');
   }
 
-  openSettings() {
-    document.getElementById('settingsPanel').classList.remove('hidden');
-  }
-
-  closeSettings() {
-    document.getElementById('settingsPanel').classList.add('hidden');
-  }
-
-  async saveSettings() {
-    const settings = {
-      backendUrl: document.getElementById('backendUrl').value || DEFAULT_BACKEND_URL,
-      useGemini: document.getElementById('useGemini').checked,
-      useOxylabs: document.getElementById('useOxylabs').checked,
-      usePerplexity: document.getElementById('usePerplexity').checked
-    };
-
-    await dataBunkerAPI.saveSettings(settings);
-    this.closeSettings();
-
-    // Check connection with new URL
-    const isHealthy = await dataBunkerAPI.healthCheck();
-    if (!isHealthy) {
-      this.addMessage('bot', 'No se pudo conectar al backend con la nueva URL.', true);
-    } else {
-      this.addMessage('bot', 'Configuracion guardada correctamente.');
-    }
-  }
-
-  async clearCache() {
-    try {
-      await dataBunkerAPI.clearCache();
-      this.addMessage('bot', '🗑️ Cache limpiado correctamente. Los proximos resultados seran actualizados.');
-    } catch (error) {
-      this.addMessage('bot', `Error al limpiar cache: ${error.message}`, true);
-    }
-  }
 }
 
 /**

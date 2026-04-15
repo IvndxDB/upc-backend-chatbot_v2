@@ -1,16 +1,41 @@
 """
 Oxylabs Service
-Handles Google Shopping searches via Oxylabs Realtime API
+Per-retailer parallel searches.
+Strategy: UPC + store first (exact), fallback to description + store if no results.
 """
+import re
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from logger_config import setup_logger
 from config import Config
 
 logger = setup_logger(__name__)
 
+# Map domain → search term appended to query
+DOMAIN_TO_STORE_NAME = {
+    'walmart.com.mx':               'walmart',
+    'amazon.com.mx':                'amazon',
+    'fahorro.com':                  'fahorro',
+    'farmaciasanpablo.com.mx':      'san pablo farmacia',
+    'benavides.com.mx':             'benavides farmacia',
+    'farmaciasguadalajara.com.mx':  'farmacias guadalajara',
+    'chedraui.com.mx':              'chedraui',
+    'soriana.com.mx':               'soriana',
+    'lacomer.com.mx':               'la comer',
+    'heb.com.mx':                   'heb',
+    'costco.com.mx':                'costco',
+    'liverpool.com.mx':             'liverpool',
+    'mercadolibre.com.mx':          'mercado libre',
+    'bodegaaurrera.com.mx':         'bodega aurrera',
+    'samsclub.com.mx':              'sams club',
+    'coppel.com':                   'coppel',
+    'elektra.com.mx':               'elektra',
+    'sanborns.com.mx':              'sanborns',
+}
+
 
 class OxylabsService:
-    """Service for Oxylabs Google Shopping API"""
+    """Service for Oxylabs Google Search API — per-retailer searches"""
 
     def __init__(self):
         self.username = Config.OXYLABS_USERNAME
@@ -19,107 +44,140 @@ class OxylabsService:
         self.api_url = 'https://realtime.oxylabs.io/v1/queries'
 
     def is_configured(self):
-        """Check if Oxylabs credentials are configured"""
         return bool(self.username and self.password)
 
-    def _simplify_query(self, query):
-        """
-        Simplify search query for better Oxylabs results
-
-        Args:
-            query: Original search query
-
-        Returns:
-            str: Simplified query
-        """
-        import re
-
-        # Remove special characters and normalize
-        cleaned = query.replace('–', ' ').replace('—', ' ')
-        cleaned = re.sub(r'[^\w\s\.]', ' ', cleaned)
-
-        # Remove common filler words (Spanish)
-        filler_words = [
-            'con', 'de', 'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
-            'bebida', 'producto', 'articulo', 'pack', 'paquete',
-            'sabor', 'hidratante', 'electrolitos', 'vitamina',
-            'tubo', 'tabletas', 'efervecentes', 'capsulas'
-        ]
-
-        # Split into words
-        words = cleaned.lower().split()
-
-        # Keep important words (not in filler list) and limit to 5 words
-        important_words = [w for w in words if w not in filler_words and len(w) > 2]
-
-        # Keep first 5 important words
-        simplified = ' '.join(important_words[:5])
-
-        return simplified if simplified else query
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
 
     def search_shopping(self, query, domains=None):
         """
-        Search Google Shopping via Oxylabs
+        Extracts UPC and description from query, then searches per retailer.
 
         Args:
-            query: Search query string
-            domains: List of domains to search (e.g., ['walmart.com.mx', 'amazon.com.mx'])
-                    If None, searches all .mx sites
+            query: Product name, UPC, or both
+            domains: Selected store domains e.g. ['walmart.com.mx', 'fahorro.com']
 
         Returns:
-            dict: {
-                'results': [...],  # List of shopping results
-                'error': None      # Or error message if failed
-            }
+            dict: {'results': [...]}
         """
         if not self.is_configured():
             logger.error("❌ Oxylabs credentials not configured")
             return {'error': 'Oxylabs not configured', 'results': []}
 
-        # Simplify query for better results
-        simplified_query = self._simplify_query(query)
-        logger.info(f"🔍 Original query: {query}")
-        logger.info(f"🔍 Simplified query: {simplified_query}")
+        upc, description = self._extract_upc_and_description(query)
+        logger.info(f"🔍 Query: {query!r} → upc={upc!r}, description={description!r}")
 
-        # Detect if this is a pure UPC/barcode query (only digits)
-        import re as _re
-        is_upc_only = bool(_re.match(r'^upc\s+\d{8,14}$', simplified_query.strip(), _re.IGNORECASE)) or \
-                      bool(_re.match(r'^\d{8,14}$', simplified_query.strip()))
-
-        # Build site filter based on domains
-        if is_upc_only:
-            # For UPC/barcode: search without site: filter
-            # domain: 'com.mx' in payload already localizes to Mexico
-            # site:.mx was causing 0 results; plain query matches what Google browser returns
-            digits_match = _re.search(r'\d{8,14}', simplified_query)
-            upc_digits = digits_match.group(0) if digits_match else simplified_query
-            search_query = f"{upc_digits} precio"
-            logger.info(f"🔢 UPC-only query: {search_query}")
-        elif domains and len(domains) > 0:
-            # Use site: operator for specific domains
-            # Format: (site:walmart.com.mx OR site:amazon.com.mx)
-            site_filter = '(' + ' OR '.join([f'site:{d}' for d in domains]) + ')'
-            search_query = f"{simplified_query} precio {site_filter}"
-            logger.info(f"🔍 Searching in {len(domains)} specific domains: {domains}")
+        if domains and len(domains) > 0:
+            results = self._search_per_retailer(upc, description, domains)
         else:
-            # Use Google Search with site:.mx filter for all Mexican stores
-            search_query = f"{simplified_query} precio site:.mx"
-            logger.info(f"🔍 Searching in all .mx sites")
+            results = self._search_broad(upc or description)
 
-        logger.info(f"🔍 Search query: {search_query}")
+        return {'results': results}
 
-        # Use google_search with parse: True (works reliably)
+    # ------------------------------------------------------------------
+    # Query parsing
+    # ------------------------------------------------------------------
+
+    def _extract_upc_and_description(self, query):
+        """
+        Separate UPC digits from text description.
+
+        Returns:
+            (upc: str|None, description: str|None)
+        """
+        upc_match = re.search(r'\b(\d{8,14})\b', query)
+        upc = upc_match.group(1) if upc_match else None
+
+        # Description = query without the UPC digits, simplified
+        if upc:
+            text_part = query.replace(upc, '').strip()
+            description = self._simplify_query(text_part) if text_part else None
+        else:
+            description = self._simplify_query(query)
+
+        return upc, description
+
+    def _simplify_query(self, query):
+        """Strip filler words, keep up to 5 meaningful words"""
+        cleaned = query.replace('–', ' ').replace('—', ' ')
+        cleaned = re.sub(r'[^\w\s\.]', ' ', cleaned)
+
+        filler_words = [
+            'con', 'de', 'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
+            'bebida', 'producto', 'articulo', 'pack', 'paquete',
+        ]
+
+        words = cleaned.lower().split()
+        important = [w for w in words if w not in filler_words and len(w) > 2]
+        simplified = ' '.join(important[:5])
+
+        return simplified if simplified else query
+
+    # ------------------------------------------------------------------
+    # Per-retailer parallel search
+    # ------------------------------------------------------------------
+
+    def _search_per_retailer(self, upc, description, domains):
+        """Run one search per domain in parallel, return combined results"""
+        all_results = []
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            future_to_domain = {
+                executor.submit(self._search_for_store, upc, description, domain): domain
+                for domain in domains
+            }
+
+            for future in as_completed(future_to_domain):
+                domain = future_to_domain[future]
+                try:
+                    store_results = future.result()
+                    if store_results:
+                        all_results.extend(store_results)
+                        logger.info(f"✅ {domain}: {len(store_results)} result(s)")
+                    else:
+                        logger.info(f"⚠️ {domain}: no results")
+                except Exception as e:
+                    logger.warning(f"⚠️ {domain}: search failed — {e}")
+
+        logger.info(f"✅ Total: {len(all_results)} results from {len(domains)} retailers")
+        return all_results
+
+    def _search_for_store(self, upc, description, domain):
+        """
+        One store search with UPC-first strategy:
+        1. If UPC available → try '{upc} {store}'
+        2. If no results    → try '{description} {store}'
+        3. If no UPC        → search by description only
+        """
+        store_name = DOMAIN_TO_STORE_NAME.get(domain, domain.split('.')[0])
+
+        # 1. UPC search (most exact)
+        if upc:
+            results = self._single_search(f"{upc} {store_name}", domain)
+            if results:
+                return results
+            logger.info(f"ℹ️ UPC gave no results for {domain}, trying description")
+
+        # 2. Description fallback
+        if description:
+            return self._single_search(f"{description} {store_name}", domain)
+
+        return []
+
+    def _single_search(self, query, domain):
+        """Execute one Oxylabs request, return top results for domain"""
+        logger.info(f"🔍 Searching: {query!r}")
+
         payload = {
-            'source': 'google_search',  # Changed from google_shopping_search
-            'domain': 'com.mx',
-            'query': search_query,
-            'parse': True,  # Parsing works well for google_search
-            'limit': 20  # Get more results to filter
+            'source': 'google_search',
+            'geo_location': 'Mexico',
+            'query': query,
+            'parse': True,
+            'context': [{'key': 'filter', 'value': 1}]
         }
 
         try:
-            logger.info(f"🔍 Oxylabs Shopping query: {query}")
-
             response = requests.post(
                 self.api_url,
                 auth=(self.username, self.password),
@@ -128,445 +186,108 @@ class OxylabsService:
             )
 
             if response.status_code != 200:
-                logger.error(f"❌ Oxylabs HTTP error: {response.status_code}")
-                return {
-                    'error': f'Oxylabs HTTP {response.status_code}',
-                    'results': []
-                }
+                logger.error(f"❌ HTTP {response.status_code}: {response.text[:100]}")
+                return []
 
-            data = response.json()
-
-            # DEBUG: Log full response structure
-            logger.info(f"🔍 DEBUG - Full Oxylabs response keys: {data.keys()}")
-            if 'results' in data and data['results']:
-                first_result = data['results'][0]
-                logger.info(f"🔍 DEBUG - First result keys: {first_result.keys()}")
-                logger.info(f"🔍 DEBUG - Status code: {first_result.get('status_code', 'NOT_FOUND')}")
-                logger.info(f"🔍 DEBUG - Parser type: {first_result.get('parser_type', 'NOT_FOUND')}")
-                logger.info(f"🔍 DEBUG - Content type: {type(first_result.get('content', 'NOT_FOUND'))}")
-                content_preview = str(first_result.get('content', ''))[:300]
-                logger.info(f"🔍 DEBUG - Content preview: {content_preview}")
-
-            if 'results' not in data or not data['results']:
-                logger.warning("⚠️ Oxylabs returned no results")
-                return {'results': []}
-
-            # Extract parsed results with validation
-            first_result = data['results'][0]
-            content = first_result.get('content', {})
-
-            # Try multiple paths to get organic results
-            organic = []
-
-            if isinstance(content, str):
-                # Content might be HTML (parse: False) or JSON (parse: True)
-                logger.info(f"🔍 Content is string (length: {len(content)})")
-
-                # Try parsing as JSON first
-                if content.strip().startswith('{'):
-                    logger.info(f"🔍 Content looks like JSON, parsing...")
-                    try:
-                        import json
-                        parsed_content = json.loads(content)
-
-                        if isinstance(parsed_content, dict):
-                            logger.info(f"🔍 Parsed JSON keys: {list(parsed_content.keys())}")
-
-                            # Try multiple paths for JSON
-                            results_data = parsed_content.get('results', {})
-                            if isinstance(results_data, dict):
-                                organic = results_data.get('organic', [])
-                                if organic:
-                                    logger.info(f"🔍 Found organic via JSON: {len(organic)} items")
-
-                            if not organic:
-                                organic = parsed_content.get('organic', [])
-                                if organic:
-                                    logger.info(f"🔍 Found organic direct: {len(organic)} items")
-
-                    except json.JSONDecodeError:
-                        logger.warning("⚠️ Failed to parse as JSON, will try HTML")
-
-                # If JSON parsing failed or no results, try HTML parsing
-                if not organic and '<html' in content.lower():
-                    logger.info("🔍 Content is HTML, parsing with regex...")
-                    organic = self._parse_html_results(content)
-                    if organic:
-                        logger.info(f"🔍 Found {len(organic)} results from HTML")
-
-                # If still empty and content exists, it might be empty HTML
-                if not organic and len(content) > 0:
-                    logger.error(f"❌ Content is string but couldn't extract results")
-                    logger.error(f"❌ Content preview: {content[:500]}")
-
-            elif isinstance(content, dict):
-                # For google_search: content -> results -> organic
-                results_data = content.get('results', {})
-                if isinstance(results_data, dict):
-                    organic = results_data.get('organic', [])
-                    if organic:
-                        logger.info(f"🔍 Found organic via google_search: {len(organic)} items")
-
-                # Fallback: content -> organic (direct)
-                if not organic:
-                    organic = content.get('organic', [])
-                    if organic:
-                        logger.info(f"🔍 Found organic direct: {len(organic)} items")
-
-                # Transform google_search results to shopping-like format
-                if organic:
-                    organic = self._transform_search_results(organic)
-                    logger.info(f"🔍 Transformed {len(organic)} search results to product format")
-
-            # If still no results, log structure and return empty (not an error)
+            organic = self._extract_organic(response.json())
             if not organic:
-                logger.warning(f"⚠️ No organic results found in any path")
-                logger.warning(f"⚠️ Available keys in first_result: {first_result.keys()}")
-                if isinstance(content, dict):
-                    logger.warning(f"⚠️ Available keys in content: {content.keys()}")
-                return {'results': []}
+                return []
 
-            logger.info(f"✅ Oxylabs returned {len(organic)} organic results")
+            # Prefer results from the target domain
+            on_domain = [r for r in organic if domain in r.get('url', '')]
+            if on_domain:
+                return on_domain[:2]
 
-            # Filter for Mexican stores (or specific domains if provided)
-            if domains and len(domains) > 0:
-                filtered = self._filter_by_domains(organic, domains)
-                logger.info(f"✅ After domain filtering: {len(filtered)} results from {len(domains)} domains")
-                # Fallback: if none of the selected stores have the product, show all Mexican stores
-                if not filtered:
-                    logger.warning(f"⚠️ No results from selected domains, falling back to all Mexican stores")
-                    filtered = self._filter_mexican_stores(organic)
-                    logger.info(f"⚠️ Fallback: {len(filtered)} Mexican store results")
-            else:
-                filtered = self._filter_mexican_stores(organic)
-                logger.info(f"✅ After filtering: {len(filtered)} Mexican store results")
-
-            return {'results': filtered}
+            # Fallback: top organic result (attach store hint for Gemini)
+            top = organic[0].copy()
+            top['_store_hint'] = DOMAIN_TO_STORE_NAME.get(domain, domain)
+            return [top]
 
         except requests.Timeout:
-            logger.error(f"⏱️ Oxylabs timeout after {self.timeout}s")
-            return {'error': 'Timeout', 'results': []}
-
-        except requests.RequestException as e:
-            logger.error(f"❌ Oxylabs request exception: {str(e)}")
-            return {'error': str(e), 'results': []}
-
+            logger.error(f"⏱️ Timeout for {domain}")
+            return []
         except Exception as e:
-            logger.error(f"❌ Oxylabs unexpected error: {str(e)}")
-            return {'error': str(e), 'results': []}
-
-    def _transform_search_results(self, search_results):
-        """
-        Transform Google Search results into product format
-        Extracts prices from snippets and domain from URLs
-
-        Args:
-            search_results: List of google_search organic results
-
-        Returns:
-            list: List of product dicts with price info
-        """
-        import re
-        from urllib.parse import urlparse, parse_qs, unquote
-
-        products = []
-        logger.info("🔍 Transforming search results to product format...")
-
-        for item in search_results:
-            if not isinstance(item, dict):
-                continue
-
-            title = item.get('title', '')
-            desc = item.get('desc', '')  # Snippet/description
-            raw_url = item.get('url', '')
-
-            if not raw_url:
-                continue
-
-            # Clean URL - handle Google redirect format
-            url = self._clean_url(raw_url)
-            if not url or not url.startswith('http'):
-                logger.info(f"⚠️ Invalid URL after cleaning: {raw_url[:80]}...")
-                continue
-
-            # Extract domain as merchant name
-            try:
-                domain = urlparse(url).netloc
-                # Clean domain: www.walmart.com.mx -> Walmart
-                merchant_name = domain.replace('www.', '').split('.')[0].title()
-            except:
-                merchant_name = 'Unknown'
-
-            # Extract price from snippet using regex
-            price = self._extract_price_from_text(desc + ' ' + title)
-
-            # Log URL for debugging
-            logger.info(f"🔗 {merchant_name}: {url[:80]}... | Price: {price if price else 'NO PRICE'}")
-
-            # Create product dict
-            product = {
-                'title': title,
-                'price': price if price else '',  # Keep as string for now
-                'url': url,
-                'desc': desc,  # Keep snippet for Gemini analysis
-                'merchant': {'name': merchant_name}
-            }
-
-            products.append(product)
-
-        logger.info(f"✅ Transformed {len(products)} search results")
-        return products
-
-    def _extract_price_from_text(self, text):
-        """
-        Extract price from text using regex patterns
-
-        Args:
-            text: Text containing potential price
-
-        Returns:
-            str: Extracted price or empty string
-        """
-        import re
-
-        if not text:
-            return ''
-
-        # Common Mexican price patterns
-        patterns = [
-            r'\$\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',  # $1,234.56 or $25.00
-            r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:MXN|pesos?|mx)',  # 1,234.56 MXN
-            r'precio:?\s*\$?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)',  # precio: $25.00
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                # Return the captured price
-                return match.group(1)
-
-        return ''
-
-    def _clean_url(self, url):
-        """
-        Clean URL - handle Google redirect format and extract actual URL
-
-        Args:
-            url: Raw URL from search result
-
-        Returns:
-            str: Cleaned URL or empty string if invalid
-        """
-        from urllib.parse import urlparse, parse_qs, unquote
-        import re
-
-        if not url:
-            return ''
-
-        # If URL already looks good (starts with http), return as-is
-        if url.startswith('http://') or url.startswith('https://'):
-            return url
-
-        # Handle Google redirect format: /url?q=https://actual-url.com&...
-        if url.startswith('/url?'):
-            try:
-                # Parse query string
-                parsed = urlparse(url)
-                params = parse_qs(parsed.query)
-                # Extract 'q' parameter (the actual URL)
-                if 'q' in params and params['q']:
-                    actual_url = unquote(params['q'][0])
-                    if actual_url.startswith('http'):
-                        return actual_url
-            except:
-                pass
-
-        # Handle relative URLs - try to construct full URL
-        # (shouldn't happen with Oxylabs, but just in case)
-        if url.startswith('/'):
-            return ''  # Can't construct without domain
-
-        return ''
-
-    def _parse_html_results(self, html_content):
-        """
-        Parse Google Shopping HTML to extract product results
-        Simple regex-based parser for when parse: False is used
-
-        Args:
-            html_content: Raw HTML string from Oxylabs
-
-        Returns:
-            list: List of product dicts
-        """
-        import re
-        import json
-
-        results = []
-        logger.info("🔍 Parsing HTML content for product data...")
-
-        try:
-            # Google Shopping often embeds JSON-LD data in script tags
-            # Look for product data in script tags
-            script_pattern = r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>'
-            scripts = re.findall(script_pattern, html_content, re.DOTALL | re.IGNORECASE)
-
-            for script in scripts:
-                try:
-                    data = json.loads(script)
-                    if isinstance(data, dict) and data.get('@type') == 'Product':
-                        # Extract product info
-                        product = {
-                            'title': data.get('name', ''),
-                            'price': data.get('offers', {}).get('price', ''),
-                            'url': data.get('url', ''),
-                            'merchant': {'name': data.get('brand', {}).get('name', 'Unknown')}
-                        }
-                        if product['title'] and product['price']:
-                            results.append(product)
-                except:
-                    continue
-
-            logger.info(f"✅ Parsed {len(results)} products from HTML JSON-LD")
-            return results
-
-        except Exception as e:
-            logger.error(f"❌ HTML parsing error: {str(e)}")
+            logger.error(f"❌ Error for {domain}: {e}")
             return []
 
-    def _filter_mexican_stores(self, results):
-        """
-        Filter results to ONLY show Mexican stores
-        Blocks non-Mexican domains and stores
+    # ------------------------------------------------------------------
+    # Broad search (no domains selected)
+    # ------------------------------------------------------------------
 
-        Args:
-            results: List of organic results
-
-        Returns:
-            list: Filtered results (ONLY Mexican stores)
-        """
-        # Major Mexican retailers
-        mexican_stores = {
-            'walmart', 'bodega aurrera', 'superama', 'sams club', 'sam\'s',
-            'soriana', 'chedraui', 'la comer', 'city market',
-            'heb', 'costco', 'mercado libre', 'amazon.com.mx',
-            'liverpool', 'palacio de hierro', 'coppel',
-            'elektra', 'sanborns', '7-eleven', 'oxxo',
-            'farmacias guadalajara', 'farmacia del ahorro', 'benavides',
-            'fahorro', 'farmacias san pablo', 'san pablo',
-            'fresko', 'city club', 'smart', 'alsuper'
+    def _search_broad(self, query):
+        """Single broad search, filtered to Mexican stores"""
+        payload = {
+            'source': 'google_search',
+            'geo_location': 'Mexico',
+            'query': query,
+            'parse': True,
+            'context': [{'key': 'filter', 'value': 1}]
         }
 
-        # Domains to block (European/non-Mexican)
-        blocked_domains = [
-            '.es', '.com.es', 'valencia', 'parafarmacia',
-            'farmacia-', '.fr', '.de', '.uk', '.eu'
+        try:
+            response = requests.post(
+                self.api_url,
+                auth=(self.username, self.password),
+                json=payload,
+                timeout=self.timeout
+            )
+
+            if response.status_code != 200:
+                logger.error(f"❌ Broad search HTTP {response.status_code}")
+                return []
+
+            organic = self._extract_organic(response.json())
+            filtered = self._filter_mexican_stores(organic)
+            logger.info(f"✅ Broad search: {len(filtered)}/{len(organic)} Mexican results")
+            return filtered
+
+        except requests.Timeout:
+            logger.error("⏱️ Broad search timeout")
+            return []
+        except Exception as e:
+            logger.error(f"❌ Broad search error: {e}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _extract_organic(self, data):
+        """Extract organic (or paid) results from Oxylabs parsed response"""
+        if 'results' not in data or not data['results']:
+            return []
+
+        content = data['results'][0].get('content', {})
+        if not isinstance(content, dict):
+            return []
+
+        results_section = content.get('results', {})
+        if not isinstance(results_section, dict):
+            return []
+
+        organic = results_section.get('organic', [])
+        if not organic:
+            organic = results_section.get('paid', [])
+
+        return organic or []
+
+    def _filter_mexican_stores(self, results):
+        """Keep only results from .mx domains or known Mexican retailers"""
+        blocked = ['.es', '.fr', '.de', '.uk', '.eu', 'parafarmacia', 'farmacia-']
+        mx_keywords = [
+            'walmart', 'soriana', 'chedraui', 'lacomer', 'heb', 'costco',
+            'mercadolibre', 'liverpool', 'coppel', 'elektra', 'sanborns',
+            'fahorro', 'benavides', 'guadalajara', 'bodegaaurrera', 'samsclub',
         ]
 
-        mexican_results = []
-        blocked_count = 0
-
+        kept = []
         for item in results:
             if not isinstance(item, dict):
                 continue
-
-            # Get URL first
             url = item.get('url', '').lower()
-
-            # Block non-Mexican domains
-            is_blocked = any(domain in url for domain in blocked_domains)
-            if is_blocked:
-                blocked_count += 1
-                logger.debug(f"🚫 Blocking non-Mexican domain: {url}")
+            if any(p in url for p in blocked):
                 continue
+            if '.com.mx' in url or url.endswith('.mx') or any(k in url for k in mx_keywords):
+                kept.append(item)
 
-            # Check if it's a Mexican store
-            merchant = item.get('merchant', {})
-            merchant_name = ''
-
-            if isinstance(merchant, dict):
-                merchant_name = merchant.get('name', '').lower()
-            elif isinstance(merchant, str):
-                merchant_name = merchant.lower()
-
-            # Must be Mexican store OR .mx domain
-            is_mexican_store = any(store in merchant_name for store in mexican_stores)
-            is_mx_domain = '.com.mx' in url or url.endswith('.mx')
-
-            if is_mexican_store or is_mx_domain:
-                mexican_results.append(item)
-            else:
-                blocked_count += 1
-                logger.debug(f"🚫 Blocking non-Mexican store: {merchant_name} ({url})")
-
-        # ONLY return Mexican stores
-        logger.info(f"🇲🇽 Keeping {len(mexican_results)} Mexican stores, blocked {blocked_count} non-Mexican")
-        return mexican_results
-
-    def _filter_by_domains(self, results, allowed_domains):
-        """
-        Filter results to ONLY show results from specific domains
-
-        Args:
-            results: List of organic results
-            allowed_domains: List of allowed domains (e.g., ['walmart.com.mx', 'amazon.com.mx'])
-
-        Returns:
-            list: Filtered results (ONLY from allowed domains)
-        """
-        from urllib.parse import urlparse
-
-        filtered_results = []
-        blocked_count = 0
-
-        # Normalize allowed domains (remove protocol and trailing slash)
-        normalized_domains = []
-        for domain in allowed_domains:
-            # Remove protocol if present
-            domain = domain.replace('https://', '').replace('http://', '')
-            # Remove trailing slash
-            domain = domain.rstrip('/')
-            # Remove www. if present for matching
-            domain_clean = domain.replace('www.', '')
-            normalized_domains.append(domain_clean.lower())
-
-        logger.info(f"🔍 Filtering by domains: {normalized_domains}")
-
-        for item in results:
-            if not isinstance(item, dict):
-                continue
-
-            # Get URL
-            url = item.get('url', '')
-            if not url:
-                blocked_count += 1
-                continue
-
-            # Parse domain from URL
-            try:
-                parsed = urlparse(url)
-                result_domain = parsed.netloc.lower().replace('www.', '')
-
-                # Strict domain match: exact or subdomain only
-                # e.g. "walmart.com.mx" matches "walmart.com.mx" ✓
-                #      "walmart.com" does NOT match "walmart.com.mx" ✓ (fixes US links)
-                is_allowed = any(
-                    result_domain == allowed_domain or
-                    result_domain.endswith('.' + allowed_domain)
-                    for allowed_domain in normalized_domains
-                )
-
-                if is_allowed:
-                    filtered_results.append(item)
-                    logger.info(f"✅ Keeping result from: {result_domain}")
-                else:
-                    blocked_count += 1
-                    logger.info(f"🚫 Blocking result from: {result_domain}")
-
-            except Exception as e:
-                logger.warning(f"⚠️ Error parsing URL {url}: {e}")
-                blocked_count += 1
-                continue
-
-        logger.info(f"🎯 Filtered to {len(filtered_results)} results from {len(normalized_domains)} domains, blocked {blocked_count}")
-        return filtered_results
+        return kept

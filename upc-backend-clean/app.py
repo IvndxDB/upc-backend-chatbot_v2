@@ -6,10 +6,28 @@ Upc o descricion
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from functools import wraps
 import re
 from logger_config import setup_logger
 from health import get_health_status
 from config import Config
+
+
+def require_api_key(f):
+    """Decorator that validates X-API-Key header on protected endpoints"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Allow CORS preflight through without key
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+        # Dev mode: no validation if API_KEYS not configured
+        if not Config.API_KEY_REQUIRED:
+            return f(*args, **kwargs)
+        key = request.headers.get('X-API-Key', '')
+        if not key or key not in Config.API_KEYS:
+            return jsonify({'error': 'API key inválida o faltante'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # ===================== Setup =====================
 app = Flask(__name__)
@@ -96,8 +114,22 @@ def debug():
     }), 200
 
 
+@app.route('/api/validate-key', methods=['POST'])
+def validate_key():
+    """
+    Validate an API key without requiring authentication.
+    Used by the extension to check if a key is valid before saving it.
+    """
+    if not Config.API_KEY_REQUIRED:
+        return jsonify({'valid': True, 'mode': 'open'})
+    data = request.get_json() or {}
+    key = data.get('key', '')
+    return jsonify({'valid': bool(key and key in Config.API_KEYS)})
+
+
 @app.route('/check_price', methods=['POST', 'OPTIONS'])
 @app.route('/api/check_price', methods=['POST', 'OPTIONS'])
+@require_api_key
 def check_price():
     """
     Main price checking endpoint
