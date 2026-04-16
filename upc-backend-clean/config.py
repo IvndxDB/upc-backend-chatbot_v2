@@ -23,8 +23,8 @@ class Config:
     GEMINI_TIMEOUT = 30
 
     # Application
-    VERSION = "5.0.0"
-    PLATFORM = "Railway"
+    VERSION = "5.1.0"
+    PLATFORM = os.environ.get('PLATFORM', 'ECS')
 
     # User authentication via API keys (comma-separated in env var)
     API_KEYS = [k.strip() for k in os.environ.get('API_KEYS', '').split(',') if k.strip()]
