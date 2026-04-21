@@ -546,6 +546,7 @@ class DataBunkerAPI {
           store: offer.seller || offer.store || 'Tienda desconocida',
           price: offer.price != null ? offer.price : null,
           url: offer.link || offer.url || '',
+          image: offer.image || offer.thumb || null,
           source_api: offer.source || 'oxylabs',
           estimated: offer.estimated || false
         }));

@@ -108,6 +108,7 @@ IMPORTANTE:
 5. Verifica que los links sean válidos (no vacíos)
 6. Marca el source como "oxylabs_shopping"
 7. SOLO incluye resultados que tengan precio Y link válidos
+8. Incluye el campo "image" con la URL de la imagen del producto (campo 'thumb' o 'image' del resultado, puede ser null)
 
 Retorna SOLO JSON válido en este formato:
 {{
@@ -118,6 +119,7 @@ Retorna SOLO JSON válido en este formato:
       "currency": "MXN",
       "seller": "Tienda",
       "link": "URL completa",
+      "image": "URL de imagen o null",
       "source": "oxylabs_shopping"
     }}
   ],
@@ -208,14 +210,17 @@ Retorna SOLO JSON válido en este formato:
             seen_sellers.add(seller)
             logger.info(f"✅ Added offer from {seller}: {'$' + str(price) if has_price else 'sin precio'} - {link[:60]}...")
 
+            image = item.get('thumb') or item.get('image') or item.get('thumbnail') or None
+
             offers.append({
                 'title': item.get('title', 'Unknown Product'),
                 'price': price if has_price else None,
                 'currency': 'MXN',
                 'seller': seller,
                 'link': link,
+                'image': image,
                 'source': 'oxylabs_shopping',
-                'estimated': not has_price  # mark as estimated if no price found
+                'estimated': not has_price
             })
 
         return {
