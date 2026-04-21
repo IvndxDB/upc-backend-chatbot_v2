@@ -326,11 +326,22 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 10px 14px;
   background: #f8fafb;
   border-radius: 10px;
   border: 1px solid transparent;
   transition: all 0.2s ease;
+}
+
+.store-thumbnail {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
 }
 
 .store-price-item:hover {

@@ -481,6 +481,7 @@ class DataBunkerPriceChecker {
 
         return `
           <div class="${cardClass}" ${dataUrl} style="${store.url ? 'cursor: pointer;' : ''}">
+            ${store.image ? `<img class="store-thumbnail" src="${store.image}" alt="">` : ''}
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               ${isLowest ? '<span class="lowest-badge">Mejor precio</span>' : ''}
@@ -502,6 +503,7 @@ class DataBunkerPriceChecker {
 
         return `
           <div class="store-price-item estimated ${store.url ? 'clickable' : ''}" ${store.url ? `data-url="${store.url}"` : ''} style="${store.url ? 'cursor:pointer;' : ''}">
+            ${store.image ? `<img class="store-thumbnail" src="${store.image}" alt="">` : ''}
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               <span class="estimated-badge">${hasPrice ? 'Estimado' : 'Precio no disponible'}</span>
@@ -547,6 +549,11 @@ class DataBunkerPriceChecker {
         ` : ''}
       `;
     }
+
+    // Hide broken product images
+    resultEl.querySelectorAll('.store-thumbnail').forEach(img => {
+      img.addEventListener('error', () => { img.style.display = 'none'; });
+    });
 
     // Open store links via chrome.tabs.create (window.open blocked by CSP in extensions)
     resultEl.addEventListener('click', (e) => {
