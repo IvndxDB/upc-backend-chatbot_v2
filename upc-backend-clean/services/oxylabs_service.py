@@ -59,21 +59,27 @@ class OxylabsService:
             domains: Selected store domains e.g. ['walmart.com.mx', 'fahorro.com']
 
         Returns:
-            dict: {'results': [...]}
+            dict: {'results': [...], 'empty_domains': [...], 'upc': ..., 'description': ...}
         """
         if not self.is_configured():
             logger.error("❌ Oxylabs credentials not configured")
-            return {'error': 'Oxylabs not configured', 'results': []}
+            return {'error': 'Oxylabs not configured', 'results': [], 'empty_domains': []}
 
         upc, description = self._extract_upc_and_description(query)
         logger.info(f"🔍 Query: {query!r} → upc={upc!r}, description={description!r}")
 
         if domains and len(domains) > 0:
-            results = self._search_per_retailer(upc, description, domains)
+            results, empty_domains = self._search_per_retailer(upc, description, domains)
         else:
             results = self._search_broad(upc or description)
+            empty_domains = []
 
-        return {'results': results}
+        return {
+            'results': results,
+            'empty_domains': empty_domains,
+            'upc': upc,
+            'description': description,
+        }
 
     # ------------------------------------------------------------------
     # Query parsing
@@ -119,8 +125,9 @@ class OxylabsService:
     # ------------------------------------------------------------------
 
     def _search_per_retailer(self, upc, description, domains):
-        """Run one search per domain in parallel, return combined results"""
+        """Run one search per domain in parallel, return (results, empty_domains)"""
         all_results = []
+        empty_domains = []
 
         with ThreadPoolExecutor(max_workers=6) as executor:
             future_to_domain = {
@@ -136,12 +143,20 @@ class OxylabsService:
                         all_results.extend(store_results)
                         logger.info(f"✅ {domain}: {len(store_results)} result(s)")
                     else:
+                        empty_domains.append(domain)
                         logger.info(f"⚠️ {domain}: no results")
                 except Exception as e:
+                    empty_domains.append(domain)
                     logger.warning(f"⚠️ {domain}: search failed — {e}")
 
-        logger.info(f"✅ Total: {len(all_results)} results from {len(domains)} retailers")
-        return all_results
+        logger.info(f"✅ Total: {len(all_results)} results from {len(domains)} retailers ({len(empty_domains)} empty)")
+        return all_results, empty_domains
+
+    @staticmethod
+    def _walmart_upc(upc):
+        """Walmart uses GTIN-14: strip check digit, left-pad to 14 digits.
+        e.g. 7501125104343 → 00750112510434"""
+        return upc[:-1].zfill(14) if upc and len(upc) >= 2 else upc
 
     def _search_for_store(self, upc, description, domain):
         """
@@ -154,7 +169,13 @@ class OxylabsService:
 
         # 1. UPC search (most exact)
         if upc:
-            results = self._single_search(f"{upc} {store_name}", domain)
+            # Walmart requires GTIN-14 format and domain in query
+            if domain == 'walmart.com.mx':
+                walmart_upc = self._walmart_upc(upc)
+                logger.info(f"🔄 Walmart UPC transform: {upc} → {walmart_upc}")
+                results = self._single_search(f"{walmart_upc} walmart.com.mx", domain)
+            else:
+                results = self._single_search(f"{upc} {store_name}", domain)
             if results:
                 return results
             logger.info(f"ℹ️ UPC gave no results for {domain}, trying description")
@@ -198,10 +219,14 @@ class OxylabsService:
             if on_domain:
                 return on_domain[:2]
 
-            # Fallback: top organic result (attach store hint for Gemini)
+            # Fallback: only accept if result is from a .mx domain or known Mexican retailer
             top = organic[0].copy()
-            top['_store_hint'] = DOMAIN_TO_STORE_NAME.get(domain, domain)
-            return [top]
+            top_url = top.get('url', '').lower()
+            if '.mx' in top_url or any(d in top_url for d in DOMAIN_TO_STORE_NAME):
+                top['_store_hint'] = DOMAIN_TO_STORE_NAME.get(domain, domain)
+                return [top]
+
+            return []
 
         except requests.Timeout:
             logger.error(f"⏱️ Timeout for {domain}")
@@ -253,7 +278,7 @@ class OxylabsService:
     # ------------------------------------------------------------------
 
     def _extract_organic(self, data):
-        """Extract organic (or paid) results from Oxylabs parsed response"""
+        """Extract organic (or paid) results from Oxylabs parsed response, with images attached."""
         if 'results' not in data or not data['results']:
             return []
 
@@ -265,11 +290,22 @@ class OxylabsService:
         if not isinstance(results_section, dict):
             return []
 
-        organic = results_section.get('organic', [])
-        if not organic:
-            organic = results_section.get('paid', [])
+        organic = list(results_section.get('organic', []) or results_section.get('paid', []))
 
-        return organic or []
+        # Attach images extracted via parsing_instructions (matched by position)
+        product_images = content.get('product_images', [])
+        if product_images and isinstance(product_images, list):
+            for i, result in enumerate(organic):
+                if i >= len(product_images):
+                    break
+                img_data = product_images[i]
+                if not isinstance(img_data, dict):
+                    continue
+                thumb = img_data.get('thumb') or img_data.get('thumb_fallback') or ''
+                if thumb and not thumb.startswith('data:') and thumb.startswith('http'):
+                    result['thumb'] = thumb
+
+        return organic
 
     def _filter_mexican_stores(self, results):
         """Keep only results from .mx domains or known Mexican retailers"""

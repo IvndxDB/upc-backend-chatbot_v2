@@ -41,14 +41,6 @@ const AVAILABLE_STORES = [
     color: '#ED1C24'
   },
   {
-    id: 'lacomer',
-    name: 'La Comer',
-    domain: 'lacomer.com.mx',
-    url: 'https://www.lacomer.com.mx/',
-    logo: '🏪',
-    color: '#00A859'
-  },
-  {
     id: 'fahorro',
     name: 'Fahorro',
     domain: 'fahorro.com',
@@ -441,8 +433,9 @@ class DataBunkerAPI {
       scrapedData = null,
       screenshot = null,
       sources = { gemini: true, oxylabs: true, perplexity: true },
-      forceRefresh = false, // option to bypass cache
-      selectedStores = null // NEW: optional list of selected store IDs
+      forceRefresh = false,
+      selectedStores = null,
+      productImage = null  // image URL from local dictionary
     } = options;
 
     const {
@@ -546,7 +539,7 @@ class DataBunkerAPI {
           store: offer.seller || offer.store || 'Tienda desconocida',
           price: offer.price != null ? offer.price : null,
           url: offer.link || offer.url || '',
-          image: offer.image || offer.thumb || null,
+          image: offer.image || offer.thumb || productImage || null,
           source_api: offer.source || 'oxylabs',
           estimated: offer.estimated || false
         }));

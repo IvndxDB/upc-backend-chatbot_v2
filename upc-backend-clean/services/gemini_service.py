@@ -95,22 +95,38 @@ class GeminiService:
             return self._format_raw_results(results)
 
         try:
-            prompt = f"""Analiza estos resultados de Google Shopping México para "{query}".
+            prompt = f"""Eres un validador de resultados de búsqueda de precios para México.
+Analiza los siguientes resultados de Google para el producto "{query}".
 
 Resultados:
-{json.dumps(results[:10], indent=2, ensure_ascii=False)}
+{json.dumps(results[:12], indent=2, ensure_ascii=False)}
 
-IMPORTANTE:
-1. PRIORIZA tiendas mexicanas: Walmart, Soriana, Chedraui, HEB, La Comer, Bodega Aurrera, Liverpool, etc.
-2. Solo incluye 1 resultado por tienda/dominio (deduplica por seller/domain)
-3. Extrae: title, price (como número), currency, seller, link (URL completa del campo 'url')
-4. Normaliza precios a formato numérico (ej: "127.00")
-5. Verifica que los links sean válidos (no vacíos)
-6. Marca el source como "oxylabs_shopping"
-7. SOLO incluye resultados que tengan precio Y link válidos
-8. Incluye el campo "image" con la URL de la imagen del producto (campo 'thumb' o 'image' del resultado, puede ser null)
+REGLAS DE VALIDACIÓN (aplica en orden):
 
-Retorna SOLO JSON válido en este formato:
+1. DESCARTA resultados que NO correspondan al producto buscado:
+   - El título debe mencionar el producto o sus palabras clave principales
+   - Si el UPC aparece en la query, el resultado debe ser del mismo producto
+   - Descarta páginas genéricas (inicio de tienda, categorías, artículos de blog)
+
+2. DESCARTA resultados sin URL válida (campo 'url' vacío o que no inicie con 'http')
+
+3. DESCARTA resultados cuya URL termina en .pdf o contiene "/pnt/" o "/facturas/" (son documentos, no páginas de producto)
+
+4. DESCARTA URLs de Amazon Seller Central (que contengan "sellercentral.amazon" o "sell.amazon")
+
+5. DESCARTA resultados cuya URL lleva solo a la home de la tienda (ej: "walmart.com.mx/", sin ruta de producto)
+
+6. PRIORIZA tiendas mexicanas: Walmart, Soriana, Chedraui, HEB, Bodega Aurrera, Liverpool, Farmacias Guadalajara, Benavides, Fahorro, Sam's, Costco, Coppel, Elektra, Sanborns, MercadoLibre
+
+7. Solo 1 resultado por tienda/dominio (deduplica por dominio)
+
+8. Normaliza price a número decimal (ej: "127.00"). Si no hay precio, usa null.
+
+9. El campo "source": usa "oxylabs_shopping" para resultados Oxylabs, "serpapi" para los que tienen "_source": "serpapi"
+
+10. Incluye "image" con la URL del campo 'thumb' o 'image' del resultado (puede ser null)
+
+Retorna SOLO JSON válido, sin texto adicional, en este formato exacto:
 {{
   "offers": [
     {{
@@ -118,12 +134,12 @@ Retorna SOLO JSON válido en este formato:
       "price": 100.00,
       "currency": "MXN",
       "seller": "Tienda",
-      "link": "URL completa",
+      "link": "URL completa del producto",
       "image": "URL de imagen o null",
       "source": "oxylabs_shopping"
     }}
   ],
-  "summary": "Resumen breve",
+  "summary": "Resumen breve de los resultados",
   "total_offers": 5
 }}"""
 

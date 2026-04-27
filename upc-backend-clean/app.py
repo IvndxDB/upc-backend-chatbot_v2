@@ -37,13 +37,10 @@ logger = setup_logger(__name__)
 # ===================== Lazy Loading de Servicios =====================
 _gemini_service = None
 _oxylabs_service = None
+_serpapi_service = None
 
 
 def get_gemini_service():
-    """
-    Lazy load Gemini service
-    Solo se importa y carga al primer uso (no en startup)
-    """
     global _gemini_service
     if _gemini_service is None:
         from services.gemini_service import GeminiService
@@ -52,15 +49,19 @@ def get_gemini_service():
 
 
 def get_oxylabs_service():
-    """
-    Lazy load Oxylabs service
-    Solo se importa y carga al primer uso (no en startup)
-    """
     global _oxylabs_service
     if _oxylabs_service is None:
         from services.oxylabs_service import OxylabsService
         _oxylabs_service = OxylabsService()
     return _oxylabs_service
+
+
+def get_serpapi_service():
+    global _serpapi_service
+    if _serpapi_service is None:
+        from services.serpapi_service import SerpAPIService
+        _serpapi_service = SerpAPIService()
+    return _serpapi_service
 
 
 # ===================== Startup Validation =====================
@@ -102,6 +103,11 @@ def debug():
         "oxylabs": {
             "configured": bool(Config.OXYLABS_USERNAME and Config.OXYLABS_PASSWORD),
             "loaded": _oxylabs_service is not None
+        },
+        "serpapi": {
+            "configured": bool(Config.SERPAPI_KEY),
+            "loaded": _serpapi_service is not None,
+            "key_chars": len(Config.SERPAPI_KEY) if Config.SERPAPI_KEY else 0
         }
     }
 
@@ -168,25 +174,35 @@ def check_price():
         else:
             logger.info(f"🔎 Processing: {display} → oxylabs: {search_query}")
 
-        # Search with Oxylabs (lazy loads service on first use)
-        if search_type == 'shopping':
-            oxylabs = get_oxylabs_service()
-            oxylabs_data = oxylabs.search_shopping(search_query, domains=domains)
-        else:
+        # Step 1: Search with Oxylabs
+        if search_type != 'shopping':
             return jsonify({'error': 'Only shopping search supported'}), 400
 
-        # Check for Oxylabs errors (hard failures only, not empty results)
+        oxylabs = get_oxylabs_service()
+        oxylabs_data = oxylabs.search_shopping(search_query, domains=domains)
+
+        # Hard failure (config / HTTP error)
         if 'error' in oxylabs_data and oxylabs_data['error']:
             error_msg = oxylabs_data['error']
-            # Treat "no results" as a soft failure — return 200 with friendly message
             if 'not configured' in error_msg.lower() or 'timeout' in error_msg.lower() or 'http' in error_msg.lower():
-                return jsonify({
-                    'error': error_msg,
-                    'offers': [],
-                    'total_offers': 0
-                }), 500
+                return jsonify({'error': error_msg, 'offers': [], 'total_offers': 0}), 500
 
         results = oxylabs_data.get('results', [])
+        empty_domains = oxylabs_data.get('empty_domains', [])
+        upc_parsed = oxylabs_data.get('upc')
+        desc_parsed = oxylabs_data.get('description')
+
+        # Step 2: SerpAPI fallback for stores Oxylabs missed
+        if empty_domains:
+            serpapi = get_serpapi_service()
+            if serpapi.is_configured():
+                logger.info(f"🔄 SerpAPI fallback for {len(empty_domains)} empty domain(s): {empty_domains}")
+                serpapi_results = serpapi.search_missing_stores(upc_parsed, desc_parsed, empty_domains)
+                if serpapi_results:
+                    results.extend(serpapi_results)
+                    logger.info(f"✅ SerpAPI added {len(serpapi_results)} result(s)")
+            else:
+                logger.info("ℹ️ SerpAPI not configured, skipping fallback")
 
         if not results:
             return jsonify({
@@ -196,7 +212,7 @@ def check_price():
                 'powered_by': 'oxylabs'
             }), 200
 
-        # Analyze with Gemini (lazy loads service on first use)
+        # Step 3: Validate and structure results with Gemini
         gemini = get_gemini_service()
         analyzed = gemini.analyze_results(results, search_query)
 
@@ -209,7 +225,6 @@ def check_price():
                     'min': min(prices),
                     'max': max(prices)
                 }
-
         # Set powered_by based on what was used
         if gemini.available:
             analyzed['powered_by'] = 'oxylabs + gemini'

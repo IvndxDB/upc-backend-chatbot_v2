@@ -243,11 +243,22 @@ body {
 .price-result-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   margin-bottom: 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid #f0f0f5;
+}
+
+.product-header-image {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: #f8fafb;
+  border: 1px solid #e5e7eb;
+  padding: 4px;
 }
 
 .product-info {
@@ -275,6 +286,19 @@ body {
 
 .price-summary {
   flex-shrink: 0;
+}
+
+.section-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.price-counts {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .stores-count {
@@ -317,9 +341,7 @@ body {
 .stores-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 280px;
-  overflow-y: auto;
+  gap: 4px;
 }
 
 .store-price-item {
@@ -327,21 +349,22 @@ body {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 5px 12px;
   background: #f8fafb;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid transparent;
   transition: all 0.2s ease;
 }
 
 .store-thumbnail {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: 8px;
   flex-shrink: 0;
   background: #fff;
   border: 1px solid #e5e7eb;
+  padding: 4px;
 }
 
 .store-price-item:hover {
@@ -359,25 +382,25 @@ body {
 
 .store-info {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .store-name {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: #073C5C;
 }
 
 .lowest-badge {
   display: inline-block;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: #059669;
   background: #d1fae5;
-  padding: 2px 8px;
-  border-radius: 10px;
-  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 8px;
 }
 
 .store-price-item.lowest .lowest-badge {
@@ -417,12 +440,13 @@ body {
 
 .store-price-value {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  font-size: 16px;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
   font-weight: 700;
   color: #073C5C;
+  white-space: nowrap;
 }
 
 .no-price-label {

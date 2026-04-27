@@ -147,9 +147,11 @@ class DataBunkerPriceChecker {
         this.addMessage('bot', `📦 ${found.Item}`);
         this.pendingSearchQuery = found.Item;
         this.pendingUPC = found.UPC;
+        this.pendingImage = found.image || null;
       } else {
         this.pendingSearchQuery = '';
         this.pendingUPC = message.trim();
+        this.pendingImage = null;
       }
       await this.showStoreSelectorInChat();
       return;
@@ -164,6 +166,7 @@ class DataBunkerPriceChecker {
 
     // No fuzzy matches → go straight to store selector with original input
     this.pendingSearchQuery = message;
+    this.pendingImage = null;
     await this.showStoreSelectorInChat();
   }
 
@@ -202,11 +205,13 @@ class DataBunkerPriceChecker {
           this.addMessage('user', originalInput);
           this.pendingSearchQuery = originalInput;
           this.pendingUPC = null;
+          this.pendingImage = null;
         } else {
           const match = matches[i];
           this.addMessage('user', match.Item);
           this.pendingSearchQuery = match.Item;
           this.pendingUPC = match.UPC || null;
+          this.pendingImage = match.image || null;
         }
 
         await this.showStoreSelectorInChat();
@@ -233,7 +238,9 @@ class DataBunkerPriceChecker {
       const scrapedData = this.pendingUPC
         ? { ...(this.currentScrapedData || {}), upc: this.pendingUPC }
         : this.currentScrapedData;
-      this.pendingUPC = null; // consume it
+      const productImage = this.pendingImage || null;
+      this.pendingUPC = null;    // consume
+      this.pendingImage = null;  // consume
 
       await dataBunkerAPI.streamPriceCheck(
         input,
@@ -241,7 +248,8 @@ class DataBunkerPriceChecker {
           scrapedData,
           screenshot: this.currentScreenshot,
           sources,
-          selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null
+          selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null,
+          productImage
         },
         {
           onStatus: (message) => {
@@ -446,11 +454,35 @@ class DataBunkerPriceChecker {
     const lowest = result.lowest;
     const count = result.count || stores.length;
 
-    // Separar precios reales de estimados
-    const realPrices = stores.filter(s => !s.estimated);
+    // Color gradient helpers (cheapest=green → mid=yellow → expensive=red)
+    const interpolateHex = (c1, c2, t) => {
+      const r1 = parseInt(c1.slice(1,3),16), g1 = parseInt(c1.slice(3,5),16), b1 = parseInt(c1.slice(5,7),16);
+      const r2 = parseInt(c2.slice(1,3),16), g2 = parseInt(c2.slice(3,5),16), b2 = parseInt(c2.slice(5,7),16);
+      return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+    };
+    const getPriceColor = (index, total) => {
+      if (total <= 1) return '#99e3dd';
+      const ratio = index / (total - 1);
+      return ratio <= 0.5
+        ? interpolateHex('#99e3dd', '#fae99f', ratio * 2)
+        : interpolateHex('#fae99f', '#fec0bf', (ratio - 0.5) * 2);
+    };
+
+    // Product image (once, from dictionary — same for all stores)
+    const productImage = stores.find(s => s.image)?.image || null;
+
+    // Separar precios reales de estimados y ordenar de menor a mayor precio
+    const rawRealPrices = stores.filter(s => !s.estimated);
+    const realPrices = [...rawRealPrices].sort((a, b) => {
+      if (a.price == null && b.price == null) return 0;
+      if (a.price == null) return 1;
+      if (b.price == null) return -1;
+      return a.price - b.price;
+    });
     const estimatedPrices = stores.filter(s => s.estimated);
     const hasEstimated = estimatedPrices.length > 0;
     const hasReal = realPrices.length > 0;
+    const pricedCount = realPrices.filter(s => s.price != null).length;
 
     // Si no hay tiendas, mostrar mensaje
     if (stores.length === 0) {
@@ -468,20 +500,25 @@ class DataBunkerPriceChecker {
         </div>
       `;
     } else {
-      // Generar HTML para precios reales
+      // Generar HTML para precios reales (ordenados, con color gradiente)
+      let priceRank = 0;
       const realStoresHtml = realPrices.map((store) => {
         const isLowest = lowest && store.store === lowest.store && !lowest.estimated;
         const priceFormatted = store.price != null
           ? `$${typeof store.price === 'number' ? store.price.toFixed(2) : store.price} MXN`
           : '<span class="no-price-label">Ver precio →</span>';
 
-        // Make entire card clickable if URL exists (use data-url, no inline onclick for CSP)
-        const cardClass = `store-price-item ${isLowest ? 'lowest' : ''} ${store.url ? 'clickable' : ''}`;
+        const bgColor = store.price != null ? getPriceColor(priceRank++, pricedCount) : null;
+        const cardStyle = [
+          bgColor ? `background:${bgColor}` : '',
+          store.url ? 'cursor:pointer' : ''
+        ].filter(Boolean).join(';');
+
+        const cardClass = `store-price-item ${store.url ? 'clickable' : ''}`;
         const dataUrl = store.url ? `data-url="${store.url}"` : '';
 
         return `
-          <div class="${cardClass}" ${dataUrl} style="${store.url ? 'cursor: pointer;' : ''}">
-            ${store.image ? `<img class="store-thumbnail" src="${store.image}" alt="">` : ''}
+          <div class="${cardClass}" ${dataUrl} style="${cardStyle}">
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               ${isLowest ? '<span class="lowest-badge">Mejor precio</span>' : ''}
@@ -502,8 +539,7 @@ class DataBunkerPriceChecker {
           : '<span class="no-price-label">Ver precio →</span>';
 
         return `
-          <div class="store-price-item estimated ${store.url ? 'clickable' : ''}" ${store.url ? `data-url="${store.url}"` : ''} style="${store.url ? 'cursor:pointer;' : ''}">
-            ${store.image ? `<img class="store-thumbnail" src="${store.image}" alt="">` : ''}
+          <div class="store-price-item estimated ${store.url ? 'clickable' : ''}" ${store.url ? `data-url="${store.url}"` : ''} style="${store.url ? 'cursor:pointer' : ''}">
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               <span class="estimated-badge">${hasPrice ? 'Estimado' : 'Precio no disponible'}</span>
@@ -518,19 +554,22 @@ class DataBunkerPriceChecker {
 
       resultEl.innerHTML = `
         <div class="price-result-header">
+          ${productImage ? `<img class="product-header-image" src="${productImage}" alt="">` : ''}
           <div class="product-info">
             <h4>${product.name || 'Producto'}</h4>
             ${product.brand ? `<span class="brand">Marca: ${product.brand}</span>` : ''}
             ${product.upc ? `<span class="upc">UPC: ${product.upc}</span>` : ''}
           </div>
-          <div class="price-summary">
-            <span class="stores-count">${realPrices.length} precio${realPrices.length !== 1 ? 's' : ''} real${realPrices.length !== 1 ? 'es' : ''}</span>
-            ${hasEstimated ? `<span class="estimated-count">${estimatedPrices.length} estimado${estimatedPrices.length !== 1 ? 's' : ''}</span>` : ''}
-          </div>
         </div>
         ${hasReal ? `
           <div class="stores-list">
-            <div class="section-label">Precios en tiempo real</div>
+            <div class="section-label-row">
+              <span class="section-label">Precios en tiempo real</span>
+              <span class="price-counts">
+                <span class="stores-count">${realPrices.length} precio${realPrices.length !== 1 ? 's' : ''} real${realPrices.length !== 1 ? 'es' : ''}</span>
+                ${hasEstimated ? `<span class="estimated-count">${estimatedPrices.length} estimado${estimatedPrices.length !== 1 ? 's' : ''}</span>` : ''}
+              </span>
+            </div>
             ${realStoresHtml}
           </div>
         ` : ''}
@@ -550,10 +589,9 @@ class DataBunkerPriceChecker {
       `;
     }
 
-    // Hide broken product images
-    resultEl.querySelectorAll('.store-thumbnail').forEach(img => {
-      img.addEventListener('error', () => { img.style.display = 'none'; });
-    });
+    // Hide broken product header image
+    const headerImg = resultEl.querySelector('.product-header-image');
+    if (headerImg) headerImg.addEventListener('error', () => { headerImg.style.display = 'none'; });
 
     // Open store links via chrome.tabs.create (window.open blocked by CSP in extensions)
     resultEl.addEventListener('click', (e) => {
@@ -570,7 +608,7 @@ class DataBunkerPriceChecker {
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
       refreshBtn.innerHTML = '⏳ Actualizando...';
-      await this.refreshSearch(query);
+      await this.refreshSearch(query, productImage);
     });
     resultEl.appendChild(refreshBtn);
 
@@ -578,11 +616,11 @@ class DataBunkerPriceChecker {
     this.scrollToBottom();
   }
 
-  async refreshSearch(query) {
-    // Clear cache for this query then show store selector again
+  async refreshSearch(query, image = null) {
     await dataBunkerAPI.clearCache();
     this.addMessage('bot', '🗑️ Cache limpiado. ¿En qué tiendas buscamos ahora?');
     this.pendingSearchQuery = query;
+    this.pendingImage = image;  // restore so next search has the image
     await this.showStoreSelectorInChat();
   }
 
