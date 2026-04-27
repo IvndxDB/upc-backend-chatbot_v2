@@ -12,6 +12,7 @@ class Config:
     GEMINI_API_KEY = os.environ.get('GEMINI_KEY') or os.environ.get('GEMINI_API_KEY', '')
     OXYLABS_USERNAME = os.environ.get('OXYLABS_USERNAME', '')
     OXYLABS_PASSWORD = os.environ.get('OXYLABS_PASSWORD', '')
+    SERPAPI_KEY = os.environ.get('SERPAPI_KEY', '')
 
     # Server Configuration
     PORT = int(os.environ.get('PORT', 5000))
