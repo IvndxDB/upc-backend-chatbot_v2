@@ -9,8 +9,10 @@ class DataBunkerPriceChecker {
     this.currentScrapedData = null;
     this.currentScreenshot = null;
     this.isProcessing = false;
-    this.pendingSearchQuery = null; // NEW: store query for store selection
-    this.selectedStores = []; // NEW: currently selected stores
+    this.pendingSearchQuery = null;
+    this.selectedStores = [];
+    this.pendingStoreUrls = {}; // {domain: url} from dictionary for Zyte
+    this.pendingWholeWeb = false; // true when "buscar en toda la web" is clicked
 
     this.init();
   }
@@ -148,10 +150,12 @@ class DataBunkerPriceChecker {
         this.pendingSearchQuery = found.Item;
         this.pendingUPC = found.UPC;
         this.pendingImage = found.image || null;
+        this.pendingStoreUrls = buildStoreUrlsFromEntry(found);
       } else {
         this.pendingSearchQuery = '';
         this.pendingUPC = message.trim();
         this.pendingImage = null;
+        this.pendingStoreUrls = {};
       }
       await this.showStoreSelectorInChat();
       return;
@@ -167,6 +171,7 @@ class DataBunkerPriceChecker {
     // No fuzzy matches → go straight to store selector with original input
     this.pendingSearchQuery = message;
     this.pendingImage = null;
+    this.pendingStoreUrls = {};
     await this.showStoreSelectorInChat();
   }
 
@@ -174,49 +179,112 @@ class DataBunkerPriceChecker {
     const messagesContainer = document.getElementById('messages');
     this.addMessage('bot', '🔍 Encontré estos productos en el catálogo. ¿Cuál buscas?');
 
+    const PAGE_SIZE = 5;
+    const MAX_PAGES = 3;
+    const totalPages = Math.min(MAX_PAGES, Math.ceil(matches.length / PAGE_SIZE));
+    let currentPage = 0;
+    let disabled = false;
+
     const selectorEl = document.createElement('div');
     selectorEl.className = 'fuzzy-results-message';
 
-    const matchesHtml = matches.map((m, i) => `
-      <button class="fuzzy-option-btn" data-index="${i}">
-        <span class="fuzzy-item-name">${m.Item}</span>
-        ${m.UPC ? `<span class="fuzzy-item-upc">${m.UPC}</span>` : ''}
-      </button>
-    `).join('');
+    // Results container — gets replaced on each page change
+    const resultsDiv = document.createElement('div');
+    resultsDiv.className = 'fuzzy-options';
 
-    selectorEl.innerHTML = `
-      <div class="fuzzy-options">
-        ${matchesHtml}
-        <button class="fuzzy-option-btn fuzzy-skip-btn">
-          🔎 Buscar "<em>${originalInput}</em>" tal como está
-        </button>
-      </div>
-    `;
+    // Pagination row
+    const paginationDiv = document.createElement('div');
+    paginationDiv.className = 'fuzzy-pagination';
 
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'fuzzy-page-btn';
+    prevBtn.textContent = '← Anterior';
+
+    const pageLabel = document.createElement('span');
+    pageLabel.className = 'fuzzy-page-label';
+
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'fuzzy-page-btn';
+    nextBtn.textContent = 'Siguiente →';
+
+    paginationDiv.appendChild(prevBtn);
+    paginationDiv.appendChild(pageLabel);
+    paginationDiv.appendChild(nextBtn);
+
+    // Skip button
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'fuzzy-option-btn fuzzy-skip-btn';
+    skipBtn.innerHTML = `🔎 Buscar "<em>${originalInput}</em>" tal como está`;
+    skipBtn.addEventListener('click', async () => {
+      if (disabled) return;
+      disabled = true;
+      selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
+      this.addMessage('user', originalInput);
+      this.pendingSearchQuery = originalInput;
+      this.pendingUPC = null;
+      this.pendingImage = null;
+      this.pendingStoreUrls = {};
+      await this.showStoreSelectorInChat();
+    });
+
+    selectorEl.appendChild(resultsDiv);
+    if (totalPages > 1) selectorEl.appendChild(paginationDiv);
+    selectorEl.appendChild(skipBtn);
+
+    const renderPage = () => {
+      resultsDiv.innerHTML = '';
+      const start = currentPage * PAGE_SIZE;
+      const end = Math.min(start + PAGE_SIZE, matches.length, MAX_PAGES * PAGE_SIZE);
+
+      for (let i = start; i < end; i++) {
+        const m = matches[i];
+        const btn = document.createElement('button');
+        btn.className = 'fuzzy-option-btn';
+        btn.innerHTML = `
+          ${m.image ? `<img class="fuzzy-item-img" src="${m.image}" alt="">` : ''}
+          <span class="fuzzy-item-info">
+            <span class="fuzzy-item-name">${m.Item}</span>
+            ${m.UPC ? `<span class="fuzzy-item-upc">${m.UPC}</span>` : ''}
+          </span>
+        `;
+        if (m.image) {
+          const img = btn.querySelector('.fuzzy-item-img');
+          if (img) img.addEventListener('error', () => { img.style.display = 'none'; });
+        }
+        btn.addEventListener('click', async () => {
+          if (disabled) return;
+          disabled = true;
+          selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
+          this.addMessage('user', m.Item);
+          this.pendingSearchQuery = m.Item;
+          this.pendingUPC = m.UPC || null;
+          this.pendingImage = m.image || null;
+          this.pendingStoreUrls = buildStoreUrlsFromEntry(m);
+          await this.showStoreSelectorInChat();
+        });
+        resultsDiv.appendChild(btn);
+      }
+
+      pageLabel.textContent = `${currentPage + 1} / ${totalPages}`;
+      prevBtn.disabled = currentPage === 0;
+      nextBtn.disabled = currentPage >= totalPages - 1;
+    };
+
+    prevBtn.addEventListener('click', () => {
+      if (disabled || currentPage === 0) return;
+      currentPage--;
+      renderPage();
+    });
+
+    nextBtn.addEventListener('click', () => {
+      if (disabled || currentPage >= totalPages - 1) return;
+      currentPage++;
+      renderPage();
+    });
+
+    renderPage();
     messagesContainer.appendChild(selectorEl);
     this.scrollToBottom();
-
-    // Handle button clicks
-    selectorEl.querySelectorAll('.fuzzy-option-btn').forEach((btn, i) => {
-      btn.addEventListener('click', async () => {
-        selectorEl.querySelectorAll('.fuzzy-option-btn').forEach(b => b.disabled = true);
-
-        if (btn.classList.contains('fuzzy-skip-btn')) {
-          this.addMessage('user', originalInput);
-          this.pendingSearchQuery = originalInput;
-          this.pendingUPC = null;
-          this.pendingImage = null;
-        } else {
-          const match = matches[i];
-          this.addMessage('user', match.Item);
-          this.pendingSearchQuery = match.Item;
-          this.pendingUPC = match.UPC || null;
-          this.pendingImage = match.image || null;
-        }
-
-        await this.showStoreSelectorInChat();
-      });
-    });
   }
 
   async processPriceCheck(input) {
@@ -239,8 +307,13 @@ class DataBunkerPriceChecker {
         ? { ...(this.currentScrapedData || {}), upc: this.pendingUPC }
         : this.currentScrapedData;
       const productImage = this.pendingImage || null;
-      this.pendingUPC = null;    // consume
-      this.pendingImage = null;  // consume
+      const storeUrls = this.pendingStoreUrls || {};
+      const wholeWeb = this.pendingWholeWeb || false;
+      this.currentStoreUrls = storeUrls;
+      this.pendingUPC = null;
+      this.pendingImage = null;
+      this.pendingStoreUrls = {};
+      this.pendingWholeWeb = false;
 
       await dataBunkerAPI.streamPriceCheck(
         input,
@@ -249,7 +322,9 @@ class DataBunkerPriceChecker {
           screenshot: this.currentScreenshot,
           sources,
           selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null,
-          productImage
+          productImage,
+          storeUrls,
+          wholeWeb
         },
         {
           onStatus: (message) => {
@@ -444,6 +519,15 @@ class DataBunkerPriceChecker {
     this.scrollToBottom();
   }
 
+  formatPrice(price) {
+    if (price == null) return null;
+    const num = typeof price === 'number' ? price : parseFloat(price);
+    if (isNaN(num)) return null;
+    return num % 1 === 0
+      ? num.toLocaleString('en-US')
+      : num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
   displayPriceResult(result, query = '') {
     const messagesContainer = document.getElementById('messages');
     const resultEl = document.createElement('div');
@@ -503,10 +587,18 @@ class DataBunkerPriceChecker {
       // Generar HTML para precios reales (ordenados, con color gradiente)
       let priceRank = 0;
       const realStoresHtml = realPrices.map((store) => {
-        const isLowest = lowest && store.store === lowest.store && !lowest.estimated;
-        const priceFormatted = store.price != null
-          ? `$${typeof store.price === 'number' ? store.price.toFixed(2) : store.price} MXN`
-          : '<span class="no-price-label">Ver precio →</span>';
+        const isLowest = lowest && store.price != null && store.price === lowest.price && !lowest.estimated;
+        const hasDiscount = store.regular_price != null && store.regular_price !== store.price;
+
+        let priceHtml;
+        if (store.price != null) {
+          const discountedStr = `$${this.formatPrice(store.price)} MXN`;
+          priceHtml = hasDiscount
+            ? `<span class="prices-group"><span class="price-regular-crossed">$${this.formatPrice(store.regular_price)} MXN</span><span class="price-discounted">${discountedStr}</span></span>`
+            : discountedStr;
+        } else {
+          priceHtml = '<span class="no-price-label">Ver precio →</span>';
+        }
 
         const bgColor = store.price != null ? getPriceColor(priceRank++, pricedCount) : null;
         const cardStyle = [
@@ -517,14 +609,20 @@ class DataBunkerPriceChecker {
         const cardClass = `store-price-item ${store.url ? 'clickable' : ''}`;
         const dataUrl = store.url ? `data-url="${store.url}"` : '';
 
+        const thumbHtml = store.image
+          ? `<img class="store-thumb" src="${store.image}" alt="">`
+          : '';
+
         return `
           <div class="${cardClass}" ${dataUrl} style="${cardStyle}">
+            ${thumbHtml}
             <div class="store-info">
               <span class="store-name">${store.store}</span>
               ${isLowest ? '<span class="lowest-badge">Mejor precio</span>' : ''}
+              ${hasDiscount ? '<span class="discount-badge">Oferta</span>' : ''}
             </div>
             <div class="store-price-value">
-              ${priceFormatted}
+              ${priceHtml}
               ${store.url ? '<span class="store-link" title="Clic para abrir">🔗</span>' : ''}
             </div>
           </div>
@@ -535,7 +633,7 @@ class DataBunkerPriceChecker {
       const estimatedStoresHtml = estimatedPrices.map((store) => {
         const hasPrice = store.price != null;
         const priceFormatted = hasPrice
-          ? `~$${typeof store.price === 'number' ? store.price.toFixed(2) : store.price} MXN`
+          ? `~$${this.formatPrice(store.price)} MXN`
           : '<span class="no-price-label">Ver precio →</span>';
 
         return `
@@ -583,7 +681,7 @@ class DataBunkerPriceChecker {
           <div class="best-price-summary">
             <span class="best-label">Mejor precio real:</span>
             <span class="best-store">${lowest.store}</span>
-            <span class="best-price">$${typeof lowest.price === 'number' ? lowest.price.toFixed(2) : lowest.price} MXN</span>
+            <span class="best-price">$${this.formatPrice(lowest.price)} MXN</span>
           </div>
         ` : ''}
       `;
@@ -592,6 +690,11 @@ class DataBunkerPriceChecker {
     // Hide broken product header image
     const headerImg = resultEl.querySelector('.product-header-image');
     if (headerImg) headerImg.addEventListener('error', () => { headerImg.style.display = 'none'; });
+
+    // Hide broken store thumbnails
+    resultEl.querySelectorAll('.store-thumb').forEach(img => {
+      img.addEventListener('error', () => { img.style.display = 'none'; });
+    });
 
     // Open store links via chrome.tabs.create (window.open blocked by CSP in extensions)
     resultEl.addEventListener('click', (e) => {
@@ -608,7 +711,7 @@ class DataBunkerPriceChecker {
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
       refreshBtn.innerHTML = '⏳ Actualizando...';
-      await this.refreshSearch(query, productImage);
+      await this.refreshSearch(query, productImage, this.currentStoreUrls);
     });
     resultEl.appendChild(refreshBtn);
 
@@ -616,11 +719,12 @@ class DataBunkerPriceChecker {
     this.scrollToBottom();
   }
 
-  async refreshSearch(query, image = null) {
+  async refreshSearch(query, image = null, storeUrls = {}) {
     await dataBunkerAPI.clearCache();
     this.addMessage('bot', '🗑️ Cache limpiado. ¿En qué tiendas buscamos ahora?');
     this.pendingSearchQuery = query;
-    this.pendingImage = image;  // restore so next search has the image
+    this.pendingImage = image;
+    this.pendingStoreUrls = storeUrls;
     await this.showStoreSelectorInChat();
   }
 
@@ -719,6 +823,9 @@ class DataBunkerPriceChecker {
       <button class="search-stores-btn">
         🔍 Buscar en <span class="store-count">${this.selectedStores.length}</span> tiendas
       </button>
+      <button class="search-web-btn">
+        🌐 Buscar en toda la web
+      </button>
     `;
 
     messagesContainer.appendChild(selectorEl);
@@ -751,6 +858,16 @@ class DataBunkerPriceChecker {
       selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
       selectorEl.style.opacity = '0.7';
       await this.confirmStoreSelectorInChat();
+    });
+
+    // Whole web search button
+    const webBtn = selectorEl.querySelector('.search-web-btn');
+    webBtn.addEventListener('click', async () => {
+      selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
+      selectorEl.style.opacity = '0.7';
+      this.pendingWholeWeb = true;
+      this.addMessage('bot', '🌐 Buscando en toda la web...');
+      await this.processPriceCheck(this.pendingSearchQuery);
     });
   }
 

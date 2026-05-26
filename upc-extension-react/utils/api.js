@@ -71,6 +71,22 @@ const AVAILABLE_STORES = [
     url: 'https://www.farmaciasguadalajara.com/',
     logo: '💊',
     color: '#C8102E'
+  },
+  {
+    id: 'lacomer',
+    name: 'La Comer',
+    domain: 'lacomer.com.mx',
+    url: 'https://www.lacomer.com.mx/',
+    logo: '🛒',
+    color: '#E31837'
+  },
+  {
+    id: 'yza',
+    name: 'Yza',
+    domain: 'yza.mx',
+    url: 'https://www.yza.mx/',
+    logo: '💊',
+    color: '#00529B'
   }
 ];
 
@@ -95,7 +111,9 @@ async function _loadDictionary() {
       console.error('Dictionary fetch failed:', res.status, url);
       return [];
     }
-    _dictionary = await res.json();
+    const buffer = await res.arrayBuffer();
+    const text = new TextDecoder('utf-8').decode(buffer);
+    _dictionary = JSON.parse(text);
     console.log('📖 Dictionary loaded:', _dictionary.length, 'items');
     return _dictionary;
   } catch (e) {
@@ -109,7 +127,7 @@ async function dictionaryLookupByUPC(upc) {
   return items.find(item => item.UPC === upc) || null;
 }
 
-async function fuzzySearch(query, maxResults = 5) {
+async function fuzzySearch(query, maxResults = 15) {
   const items = await _loadDictionary();
   const normQuery = _normStr(query);
   const queryWords = normQuery.split(' ').filter(w => w.length > 2);
@@ -130,6 +148,40 @@ async function fuzzySearch(query, maxResults = 5) {
   // Sort: highest score first, then shorter name (more specific)
   scored.sort((a, b) => b._score - a._score || a.Item.length - b.Item.length);
   return scored.slice(0, maxResults);
+}
+
+// ----------------------------------------
+
+/**
+ * Build a {domain: url} map from a dictionary entry's urls array.
+ * Matches each URL's hostname against known store domains.
+ */
+// URL patterns that indicate a search/listing page rather than a product page
+const SEARCH_URL_PATTERNS = [
+  '/catalogsearch/', '/search?', '/buscar?', '/result/index/',
+  '/s?', '/?q=', '/query/', '/find?', 'search_query=', '/keyword/'
+];
+
+function isSearchUrl(url) {
+  return SEARCH_URL_PATTERNS.some(p => url.includes(p));
+}
+
+function buildStoreUrlsFromEntry(entry) {
+  const storeUrls = {};
+  if (!entry || !Array.isArray(entry.urls)) return storeUrls;
+  const allDomains = AVAILABLE_STORES.map(s => s.domain);
+  for (const url of entry.urls) {
+    try {
+      const hostname = new URL(url).hostname.replace('www.', '').toLowerCase();
+      const domain = allDomains.find(d => hostname === d || hostname.endsWith('.' + d));
+      if (!domain) continue;
+      // Prefer direct product pages over search/listing pages
+      if (!storeUrls[domain] || isSearchUrl(storeUrls[domain])) {
+        storeUrls[domain] = url;
+      }
+    } catch (e) { /* skip invalid URLs */ }
+  }
+  return storeUrls;
 }
 
 // ----------------------------------------
@@ -435,7 +487,9 @@ class DataBunkerAPI {
       sources = { gemini: true, oxylabs: true, perplexity: true },
       forceRefresh = false,
       selectedStores = null,
-      productImage = null  // image URL from local dictionary
+      productImage = null,
+      storeUrls = {},       // {domain: url} from local dictionary for Zyte
+      wholeWeb = false      // true = no domain filter, search all of Google Shopping
     } = options;
 
     const {
@@ -462,6 +516,35 @@ class DataBunkerAPI {
 
       if (!query && !upc) {
         throw new Error('Se requiere nombre de producto o UPC');
+      }
+
+      // Whole web mode: no domain filter, no Zyte URLs
+      if (wholeWeb) {
+        onStatus('Consultando precios en toda la web...');
+        console.log('🌐 Whole web search — no domain filter');
+
+        const response = await fetch(`${this.backendUrl}/api/check_price`, {
+          method: 'POST',
+          headers: await this._authHeaders(),
+          body: JSON.stringify({
+            query,
+            upc,
+            search_type: 'shopping',
+            domains: null,
+            store_urls: {}
+          })
+        });
+
+        if (response.status === 401) throw new Error('Clave de acceso inválida. Por favor recarga la extensión e ingresa tu clave.');
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Error del servidor: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        const result = this._transformResponse(data, query, upc, productImage);
+        onComplete(result);
+        return;
       }
 
       // Get selected stores (from parameter or storage)
@@ -507,7 +590,8 @@ class DataBunkerAPI {
           query,
           upc,
           search_type: sources.oxylabs ? 'shopping' : 'organic',
-          domains: domains.length > 0 ? domains : null
+          domains: domains.length > 0 ? domains : null,
+          store_urls: storeUrls
         })
       });
 
@@ -520,40 +604,7 @@ class DataBunkerAPI {
       }
 
       const data = await response.json();
-
-      // Transform the response to match expected format
-      const result = {
-        product: {
-          name: query,
-          upc: upc || data.upc || null,
-          brand: data.brand || null
-        },
-        stores: [],
-        lowest: null,
-        count: 0
-      };
-
-      // Parse offers into stores format
-      if (data.offers && Array.isArray(data.offers)) {
-        result.stores = data.offers.map(offer => ({
-          store: offer.seller || offer.store || 'Tienda desconocida',
-          price: offer.price != null ? offer.price : null,
-          url: offer.link || offer.url || '',
-          image: offer.image || offer.thumb || productImage || null,
-          source_api: offer.source || 'oxylabs',
-          estimated: offer.estimated || false
-        }));
-
-        result.count = result.stores.length;
-
-        // Find lowest price (only among stores with a real price)
-        const priced = result.stores.filter(s => s.price != null && !s.estimated);
-        if (priced.length > 0) {
-          result.lowest = priced.reduce((min, store) =>
-            store.price < min.price ? store : min
-          );
-        }
-      }
+      const result = this._transformResponse(data, query, upc, productImage);
 
       // Save to cache
       await this.setCachedResults(query, upc, result);
@@ -565,6 +616,42 @@ class DataBunkerAPI {
       console.error('Error in streamPriceCheck:', error);
       onError(error.message || 'Error desconocido');
     }
+  }
+
+  _transformResponse(data, query, upc, productImage) {
+    const result = {
+      product: {
+        name: query,
+        upc: upc || data.upc || null,
+        brand: data.brand || null
+      },
+      stores: [],
+      lowest: null,
+      count: 0
+    };
+
+    if (data.offers && Array.isArray(data.offers)) {
+      result.stores = data.offers.map(offer => ({
+        store: offer.seller || offer.store || 'Tienda desconocida',
+        price: offer.price != null ? offer.price : null,
+        regular_price: offer.regular_price != null ? offer.regular_price : null,
+        url: offer.link || offer.url || '',
+        image: offer.image || offer.thumb || productImage || null,
+        source_api: offer.source || 'oxylabs',
+        estimated: offer.estimated || false
+      }));
+
+      result.count = result.stores.length;
+
+      const priced = result.stores.filter(s => s.price != null && !s.estimated);
+      if (priced.length > 0) {
+        result.lowest = priced.reduce((min, store) =>
+          store.price < min.price ? store : min
+        );
+      }
+    }
+
+    return result;
   }
 
   /**
