@@ -13,6 +13,7 @@ class Config:
     OXYLABS_USERNAME = os.environ.get('OXYLABS_USERNAME', '')
     OXYLABS_PASSWORD = os.environ.get('OXYLABS_PASSWORD', '')
     SERPAPI_KEY = os.environ.get('SERPAPI_KEY', '')
+    ZYTE_API_KEY = os.environ.get('ZYTE_API_KEY', '')
 
     # Server Configuration
     PORT = int(os.environ.get('PORT', 5000))

@@ -37,7 +37,7 @@ logger = setup_logger(__name__)
 # ===================== Lazy Loading de Servicios =====================
 _gemini_service = None
 _oxylabs_service = None
-_serpapi_service = None
+_zyte_service = None
 
 
 def get_gemini_service():
@@ -56,12 +56,12 @@ def get_oxylabs_service():
     return _oxylabs_service
 
 
-def get_serpapi_service():
-    global _serpapi_service
-    if _serpapi_service is None:
-        from services.serpapi_service import SerpAPIService
-        _serpapi_service = SerpAPIService()
-    return _serpapi_service
+def get_zyte_service():
+    global _zyte_service
+    if _zyte_service is None:
+        from services.zyte_service import ZyteService
+        _zyte_service = ZyteService()
+    return _zyte_service
 
 
 # ===================== Startup Validation =====================
@@ -100,15 +100,15 @@ def debug():
             "available": bool(Config.GEMINI_API_KEY),
             "loaded": _gemini_service is not None
         },
+        "zyte": {
+            "configured": bool(Config.ZYTE_API_KEY),
+            "loaded": _zyte_service is not None,
+            "key_chars": len(Config.ZYTE_API_KEY) if Config.ZYTE_API_KEY else 0
+        },
         "oxylabs": {
             "configured": bool(Config.OXYLABS_USERNAME and Config.OXYLABS_PASSWORD),
             "loaded": _oxylabs_service is not None
         },
-        "serpapi": {
-            "configured": bool(Config.SERPAPI_KEY),
-            "loaded": _serpapi_service is not None,
-            "key_chars": len(Config.SERPAPI_KEY) if Config.SERPAPI_KEY else 0
-        }
     }
 
     return jsonify({
@@ -138,100 +138,92 @@ def validate_key():
 @require_api_key
 def check_price():
     """
-    Main price checking endpoint
-    Uses lazy loading for Gemini (only loads on first use)
+    Two-path search:
+      • store_urls present → Zyte (dictionary URLs) → Gemini
+      • store_urls absent  → Oxylabs (manual query or whole-web) → Gemini
     """
-    # Handle CORS preflight
     if request.method == 'OPTIONS':
         return '', 204
 
     try:
         data = request.get_json()
-
         if not data:
             return jsonify({'error': 'No data provided'}), 400
 
-        query = data.get('query', '').strip()
-        upc = _clean_upc(data.get('upc', ''))
-        search_type = data.get('search_type', 'shopping')
-        domains = data.get('domains', None)  # NEW: optional list of domains
+        query      = data.get('query', '').strip()
+        upc        = _clean_upc(data.get('upc', ''))
+        domains    = data.get('domains', None)
+        store_urls = data.get('store_urls', {})
 
-        # Validate input
         if not query and not upc:
             return jsonify({'error': 'query or upc required'}), 400
 
-        # Build search query
-        # When UPC is available, use it as primary search (more precise for Google)
-        # Product name (query) is kept for display only
-        if upc:
-            search_query = f"UPC {upc}"
-        else:
-            search_query = query
+        display      = query if query else f"UPC {upc}"
+        search_query = f"{query} {upc}".strip() if (query and upc) else (query or upc)
 
-        display = query if query else f"UPC {upc}"
-        if domains:
-            logger.info(f"🔎 Processing: {display} → oxylabs: {search_query} (domains: {len(domains)})")
-        else:
-            logger.info(f"🔎 Processing: {display} → oxylabs: {search_query}")
+        logger.info(f"🔎 {display}" + (f" [{len(domains)} tiendas]" if domains else " [toda la web]"))
 
-        # Step 1: Search with Oxylabs
-        if search_type != 'shopping':
-            return jsonify({'error': 'Only shopping search supported'}), 400
+        results    = []
+        powered_by = ''
 
-        oxylabs = get_oxylabs_service()
-        oxylabs_data = oxylabs.search_shopping(search_query, domains=domains)
-
-        # Hard failure (config / HTTP error)
-        if 'error' in oxylabs_data and oxylabs_data['error']:
-            error_msg = oxylabs_data['error']
-            if 'not configured' in error_msg.lower() or 'timeout' in error_msg.lower() or 'http' in error_msg.lower():
-                return jsonify({'error': error_msg, 'offers': [], 'total_offers': 0}), 500
-
-        results = oxylabs_data.get('results', [])
-        empty_domains = oxylabs_data.get('empty_domains', [])
-        upc_parsed = oxylabs_data.get('upc')
-        desc_parsed = oxylabs_data.get('description')
-
-        # Step 2: SerpAPI fallback for stores Oxylabs missed
-        if empty_domains:
-            serpapi = get_serpapi_service()
-            if serpapi.is_configured():
-                logger.info(f"🔄 SerpAPI fallback for {len(empty_domains)} empty domain(s): {empty_domains}")
-                serpapi_results = serpapi.search_missing_stores(upc_parsed, desc_parsed, empty_domains)
-                if serpapi_results:
-                    results.extend(serpapi_results)
-                    logger.info(f"✅ SerpAPI added {len(serpapi_results)} result(s)")
+        if store_urls:
+            # ── PATH A: Zyte — direct extraction from dictionary URLs ──────────
+            urls_to_extract = (
+                {d: store_urls[d] for d in domains if d in store_urls}
+                if domains else store_urls
+            )
+            if not urls_to_extract:
+                logger.info("ℹ️ No dictionary URLs match selected stores")
             else:
-                logger.info("ℹ️ SerpAPI not configured, skipping fallback")
+                zyte = get_zyte_service()
+                if zyte.is_configured():
+                    logger.info(f"🔵 Zyte: {len(urls_to_extract)} URL(s)")
+                    zyte_results, failed = zyte.extract_products(urls_to_extract)
+                    results.extend(zyte_results)
+                    if failed:
+                        logger.info(f"⚠️ Zyte failed for: {failed}")
+                else:
+                    logger.warning("⚠️ Zyte not configured")
+            powered_by = 'zyte'
+
+        else:
+            # ── PATH B: Oxylabs — manual search or whole-web ──────────────────
+            logger.info(f"🟣 Oxylabs {'broad' if not domains else f'{len(domains)} domain(s)'}")
+            oxylabs      = get_oxylabs_service()
+            oxylabs_data = oxylabs.search_shopping(search_query, domains=domains)
+
+            if oxylabs_data.get('error'):
+                err = oxylabs_data['error']
+                return jsonify({'error': err, 'offers': [], 'total_offers': 0}), 500
+
+            results.extend(oxylabs_data.get('results', []))
+            powered_by = 'oxylabs'
 
         if not results:
             return jsonify({
                 'offers': [],
                 'summary': 'No se encontraron resultados para este producto',
                 'total_offers': 0,
-                'powered_by': 'oxylabs'
+                'powered_by': powered_by,
             }), 200
 
-        # Step 3: Validate and structure results with Gemini
-        gemini = get_gemini_service()
-        analyzed = gemini.analyze_results(results, search_query)
+        # ── Gemini — validate and clean results ───────────────────────────────
+        gemini   = get_gemini_service()
+        analyzed = gemini.analyze_results(results, display)
+        offers   = analyzed.get('offers', [])
 
-        # Add metadata
-        offers = analyzed.get('offers', [])
         if offers:
             prices = [o['price'] for o in offers if isinstance(o.get('price'), (int, float))]
             if prices:
-                analyzed['price_range'] = {
-                    'min': min(prices),
-                    'max': max(prices)
-                }
-        # Set powered_by based on what was used
-        if gemini.available:
-            analyzed['powered_by'] = 'oxylabs + gemini'
-        else:
-            analyzed['powered_by'] = 'oxylabs'
+                analyzed['price_range'] = {'min': min(prices), 'max': max(prices)}
 
-        logger.info(f"✅ Returned {len(offers)} offers")
+        analyzed['powered_by'] = f"{powered_by} + gemini" if gemini.available else powered_by
+
+        logger.info(f"✅ Returned {len(offers)} offers ({analyzed['powered_by']})")
+        for o in offers:
+            price_str = f"${o['price']}" if o.get('price') is not None else "sin precio"
+            reg_str   = f" (regular ${o['regular_price']})" if o.get('regular_price') else ""
+            logger.info(f"   [{o.get('source','?')}] {o.get('seller','?')} — {price_str}{reg_str} — {o.get('link','')[:60]}")
         return jsonify(analyzed), 200
 
     except Exception as e:

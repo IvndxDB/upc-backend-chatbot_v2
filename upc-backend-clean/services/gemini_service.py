@@ -1,92 +1,89 @@
 """
 Gemini Service with Lazy Loading
-Loads google.generativeai only when first needed (not at startup)
+Uses google.genai (new SDK) — google.generativeai is EOL.
 """
 import json
 import re
+from urllib.parse import urlparse
 from logger_config import setup_logger
 from config import Config
 
 logger = setup_logger(__name__)
 
+# Known Mexican retailer domains (used to filter raw results without Gemini)
+KNOWN_DOMAINS = {
+    # Supermarkets / general
+    'walmart.com.mx', 'amazon.com.mx', 'chedraui.com.mx',
+    'soriana.com', 'soriana.com.mx', 'lacomer.com.mx',
+    'heb.com.mx', 'costco.com.mx', 'bodegaaurrera.com.mx', 'samsclub.com.mx',
+    'lacomer.com.mx', 'yza.mx',
+    # Pharmacies
+    'fahorro.com', 'farmaciasanpablo.com.mx', 'benavides.com.mx',
+    'farmaciasguadalajara.com', 'farmaciasguadalajara.com.mx',
+    # Other retailers
+    'liverpool.com.mx', 'mercadolibre.com.mx',
+    'coppel.com', 'elektra.com.mx', 'sanborns.com.mx',
+}
+
+
+def _url_domain(url):
+    """Extract bare domain from URL, e.g. 'www.walmart.com.mx' → 'walmart.com.mx'"""
+    try:
+        return urlparse(url).netloc.lower().replace('www.', '')
+    except Exception:
+        return ''
+
 
 class GeminiService:
-    """Service for Gemini AI with lazy loading"""
 
     def __init__(self):
-        self.model = None
+        self.client = None
         self.available = False
         self.loaded = False
-        # No se inicializa aquí - lazy loading
+        self._model_name = None
 
     def _initialize(self):
-        """
-        Lazy initialization de Gemini
-        Solo se llama al primer uso de analyze_results()
-        """
         if self.loaded:
             return
-
         self.loaded = True
 
         try:
-            # Import here, not at module level
-            import google.generativeai as genai
+            from google import genai
 
             if not Config.GEMINI_API_KEY:
                 logger.warning("⚠️ Gemini API key not configured")
-                self.available = False
                 return
 
-            genai.configure(api_key=Config.GEMINI_API_KEY)
+            self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
-            # Try multiple model names in order of preference
             model_names = [
-                'gemini-1.5-pro',
+                'gemini-2.0-flash',
+                'gemini-2.0-flash-lite',
                 'gemini-1.5-flash',
-                'gemini-pro',
-                'models/gemini-1.5-pro',
-                'models/gemini-1.5-flash',
-                'models/gemini-pro'
             ]
 
             for model_name in model_names:
                 try:
                     logger.info(f"🤖 Trying Gemini model: {model_name}")
-                    self.model = genai.GenerativeModel(model_name)
-                    # Test with a simple prompt to verify it works
-                    test_response = self.model.generate_content("Say 'OK'")
-                    logger.info(f"✅ Gemini initialized successfully with model: {model_name}")
+                    self._model_name = model_name
                     self.available = True
+                    logger.info(f"✅ Gemini configured with model: {model_name}")
                     return
                 except Exception as model_error:
-                    logger.warning(f"⚠️ Model {model_name} failed: {str(model_error)}")
+                    logger.warning(f"⚠️ Model {model_name} failed: {model_error}")
                     continue
 
-            # If we get here, no model worked
             logger.error("❌ No Gemini model worked")
             self.available = False
 
         except ImportError:
-            logger.error("❌ google.generativeai not installed")
+            logger.error("❌ google-genai not installed")
             self.available = False
-
         except Exception as e:
-            logger.error(f"❌ Gemini initialization failed: {str(e)}")
+            logger.error(f"❌ Gemini initialization failed: {e}")
             self.available = False
-
+            
     def analyze_results(self, results, query):
-        """
-        Analyze Oxylabs results with Gemini AI
-
-        Args:
-            results: List of raw results from Oxylabs
-            query: Original search query
-
-        Returns:
-            dict: Structured analysis or raw results if Gemini not available
-        """
-        # Lazy initialization on first use
         if not self.loaded:
             self._initialize()
 
@@ -95,175 +92,242 @@ class GeminiService:
             return self._format_raw_results(results)
 
         try:
-            prompt = f"""Eres un validador de resultados de búsqueda de precios para México.
-Analiza los siguientes resultados de Google para el producto "{query}".
+            sources = {r.get('_source') for r in results}
+            all_zyte   = sources == {'zyte'}
+            all_organic = sources <= {'oxylabs_organic', None}
 
-Resultados:
-{json.dumps(results[:12], indent=2, ensure_ascii=False)}
+            if all_zyte:
+                validation_rules = """═══ REGLAS DE VALIDACIÓN ═══
+1. PRODUCTO CORRECTO: Los URLs vienen de un diccionario curado, confía en que son el producto.
+   Descarta SOLO si el nombre extraído es completamente diferente al buscado (otro producto distinto).
+2. TIPO DE SITIO: Descarta páginas de búsqueda/catálogo, PDFs, sellercentral. Solo páginas de producto.
+3. MEDICAMENTOS CON DOSIS: Si el producto tiene mg/ml específicos (ej. Mounjaro 2.5mg), la dosis debe coincidir. Descarta variantes de dosis diferente o marcas genéricas no autorizadas.
+4. PRECIO: Si "price" existe úsalo. Si es null y source es "zyte" → incluye con price: null (agotado). Copia "regular_price" si es distinto de "price"."""
+            elif all_organic:
+                validation_rules = """═══ REGLAS DE VALIDACIÓN (BÚSQUEDA WEB POR UPC) ═══
+1. PRODUCTO CORRECTO: Se buscó por UPC en Google, los resultados son páginas de tiendas mexicanas.
+   Descarta SOLO si el título indica claramente un producto distinto.
+2. TIPO DE SITIO: Acepta solo páginas de producto de tiendas mexicanas. Descarta blogs, noticias, PDFs, sellercentral.
+3. PRECIO: Los resultados de google_search no traen precio — pon price: null. El usuario verá el link directo.
+4. TIENDAS: Extrae el nombre de la tienda del dominio (ej. walmart.com.mx → "Walmart")."""
+            else:
+                validation_rules = """═══ REGLAS DE VALIDACIÓN (ESTRICTAS) ═══
+1. MARCA Y SUSTANCIA: Descarta marcas genéricas desconocidas, "fórmulas avanzadas" o "kits de apoyo" cuando el buscado es de patente. Solo acepta la marca original o genéricos con nombre de sustancia claro.
+2. DOSIS EXACTA: El gramaje (mg) y volumen (ml) deben coincidir al 100%. Si buscas 2.5mg y el resultado dice 5mg → DESCARTA.
+3. TIPO DE SITIO: Descarta blogs, noticias, PDFs, facturación, sellercentral. Solo páginas de producto final.
+4. NO SUPLEMENTOS: Si el resultado es un suplemento/vitamina pero el buscado es un medicamento → DESCARTA.
+5. PRECIO: Para "oxylabs_shopping" o "serpapi", omite resultados sin precio real. Copia "regular_price" si es distinto de "price"."""
 
-REGLAS DE VALIDACIÓN (aplica en orden):
+            prompt = f"""Eres un validador de precios de productos para el mercado mexicano.
 
-1. DESCARTA resultados que NO correspondan al producto buscado:
-   - El título debe mencionar el producto o sus palabras clave principales
-   - Si el UPC aparece en la query, el resultado debe ser del mismo producto
-   - Descarta páginas genéricas (inicio de tienda, categorías, artículos de blog)
+PRODUCTO BUSCADO: "{query}"
 
-2. DESCARTA resultados sin URL válida (campo 'url' vacío o que no inicie con 'http')
+DATOS:
+{json.dumps(self._slim_for_prompt(results[:20]), indent=2, ensure_ascii=False)}
 
-3. DESCARTA resultados cuya URL termina en .pdf o contiene "/pnt/" o "/facturas/" (son documentos, no páginas de producto)
+{validation_rules}
 
-4. DESCARTA URLs de Amazon Seller Central (que contengan "sellercentral.amazon" o "sell.amazon")
-
-5. DESCARTA resultados cuya URL lleva solo a la home de la tienda (ej: "walmart.com.mx/", sin ruta de producto)
-
-6. PRIORIZA tiendas mexicanas: Walmart, Soriana, Chedraui, HEB, Bodega Aurrera, Liverpool, Farmacias Guadalajara, Benavides, Fahorro, Sam's, Costco, Coppel, Elektra, Sanborns, MercadoLibre
-
-7. Solo 1 resultado por tienda/dominio (deduplica por dominio)
-
-8. Normaliza price a número decimal (ej: "127.00"). Si no hay precio, usa null.
-
-9. El campo "source": usa "oxylabs_shopping" para resultados Oxylabs, "serpapi" para los que tienen "_source": "serpapi"
-
-10. Incluye "image" con la URL del campo 'thumb' o 'image' del resultado (puede ser null)
-
-Retorna SOLO JSON válido, sin texto adicional, en este formato exacto:
+═══ INSTRUCCIONES DE SALIDA ═══
+- Deduplica: 1 oferta por tienda.
+- Si no hay ningún resultado válido, "offers" debe ser [].
+- Retorna SOLO este JSON sin texto adicional:
 {{
   "offers": [
     {{
-      "title": "Nombre producto",
-      "price": 100.00,
+      "title": "Nombre completo",
+      "price": 0.00,
+      "regular_price": null,
       "currency": "MXN",
-      "seller": "Tienda",
-      "link": "URL completa del producto",
-      "image": "URL de imagen o null",
-      "source": "oxylabs_shopping"
+      "seller": "Nombre de la tienda",
+      "link": "URL",
+      "image": "URL o null",
+      "source": "zyte, oxylabs_shopping, oxylabs_organic o serpapi (mismo que el input)"
     }}
   ],
-  "summary": "Resumen breve de los resultados",
-  "total_offers": 5
+  "summary": "Explicación breve",
+  "total_offers": 0
 }}"""
 
             logger.info("🤖 Analyzing with Gemini...")
 
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+            )
             result_text = response.text.strip()
 
-            # Remove markdown code blocks if present
             if result_text.startswith('```'):
-                result_text = re.sub(
-                    r'^```(?:json)?\n|```$',
-                    '',
-                    result_text,
-                    flags=re.MULTILINE
-                )
+                result_text = re.sub(r'^```(?:json)?\n|```$', '', result_text, flags=re.MULTILINE)
 
             parsed = json.loads(result_text)
             logger.info(f"✅ Gemini analyzed {len(parsed.get('offers', []))} offers")
             return parsed
 
         except json.JSONDecodeError as e:
-            logger.error(f"❌ Gemini returned invalid JSON: {str(e)}")
+            logger.error(f"❌ Gemini returned invalid JSON: {e}")
+            return self._format_raw_results(results)
+        except Exception as e:
+            logger.error(f"❌ Gemini analysis error: {e}")
             return self._format_raw_results(results)
 
-        except Exception as e:
-            logger.error(f"❌ Gemini analysis error: {str(e)}")
-            return self._format_raw_results(results)
+    def search_missing_prices(self, product_query, missing_stores):
+        """
+        Third-pass: Gemini with Google Search grounding for stores still missing prices.
+        Uses google.genai grounding tool (Gemini 2.0).
+        """
+        if not self.loaded:
+            self._initialize()
+        if not self.available or not self._model_name:
+            return []
+
+        offers = []
+
+        for store_name, domain in missing_stores[:4]:
+            try:
+                from google.genai import types
+
+                config = types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())]
+                )
+
+                prompt = (
+                    f'Busca el precio actual de "{product_query}" en {store_name} México ({domain}). '
+                    f'El producto debe coincidir EXACTAMENTE — no incluyas variantes distintas. '
+                    f'Responde SOLO con este JSON sin texto adicional: '
+                    f'{{"title":"nombre exacto","price":100.00,"url":"URL directa al producto"}} '
+                    f'o {{"price":null,"url":null,"title":null}} si no lo encuentras o no coincide.'
+                )
+
+                response = self.client.models.generate_content(
+                    model=self._model_name,
+                    contents=prompt,
+                    config=config,
+                )
+                text = response.text.strip()
+                if text.startswith('```'):
+                    text = re.sub(r'^```(?:json)?\n|```$', '', text, flags=re.MULTILINE)
+
+                parsed = json.loads(text)
+                price = parsed.get('price')
+                url = parsed.get('url', '') or ''
+
+                if price and url.startswith('http') and domain in url.lower():
+                    offers.append({
+                        'title': parsed.get('title', product_query),
+                        'price': float(price),
+                        'currency': 'MXN',
+                        'seller': store_name.capitalize(),
+                        'link': url,
+                        'image': None,
+                        'source': 'gemini_search',
+                    })
+                    logger.info(f"✅ Gemini 3rd search {store_name}: ${price}")
+                else:
+                    logger.info(f"ℹ️ Gemini 3rd search: {domain} no encontrado")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Gemini grounding {domain}: {e}")
+
+        return offers
+
+    @staticmethod
+    def _slim_for_prompt(results):
+        """Keep only fields Gemini needs — strips long snippet/desc fields that inflate the prompt."""
+        keep = {'url', 'title', 'price', 'regular_price', '_source', '_seller', '_domain', 'currency', 'thumb'}
+        return [{k: v for k, v in r.items() if k in keep and v not in (None, '', [])} for r in results]
 
     def _format_raw_results(self, results):
-        """
-        Format raw Oxylabs results without AI analysis
-        Fallback when Gemini is not available or fails
-
-        Args:
-            results: List of raw Oxylabs results
-
-        Returns:
-            dict: Formatted results
-        """
+        """Fallback formatter when Gemini is unavailable or rate-limited."""
         offers = []
-        seen_sellers = set()
+        seen_domains = set()
 
-        for item in results[:15]:  # Check more items
-            # Validate item is a dictionary
+        for item in results[:15]:
             if not isinstance(item, dict):
-                logger.warning(f"⚠️ Skipping non-dict item: {type(item)}")
                 continue
 
-            # Extract link - try multiple fields
             link = item.get('url', '') or item.get('link', '') or item.get('product_url', '')
             if not link or not link.startswith('http'):
-                logger.info(f"⚠️ Skipping item - invalid link")
                 continue
 
-            # Extract merchant/seller — google_search has no merchant field, derive from URL
-            merchant = item.get('merchant', {})
-            if isinstance(merchant, dict) and merchant.get('name'):
-                seller = merchant['name']
-            elif isinstance(merchant, str) and merchant:
-                seller = merchant
-            else:
-                # Derive seller name from domain (e.g. walmart.com.mx → Walmart)
-                try:
-                    from urllib.parse import urlparse
-                    domain = urlparse(link).netloc.lower().replace('www.', '')
-                    seller = domain.split('.')[0].capitalize()
-                except Exception:
-                    seller = 'Unknown'
+            link_lower = link.lower()
 
-            # Deduplicate by seller
-            if seller in seen_sellers:
-                logger.info(f"⚠️ Skipping duplicate seller: {seller}")
+            # Filter documents, Seller Central, and known junk patterns
+            if (link_lower.endswith('.pdf')
+                    or '/pnt/' in link_lower
+                    or '/facturas/' in link_lower
+                    or '/tyc/' in link_lower
+                    or '/terminos' in link_lower
+                    or 'sellercentral.amazon' in link_lower
+                    or 'sell.amazon' in link_lower):
+                logger.info(f"⚠️ Skipping filtered URL: {link[:60]}")
                 continue
 
-            # Extract price (optional - include result even without price)
+            domain = _url_domain(link)
+
+            # Skip homepages (path is empty or just '/')
+            parsed_url = urlparse(link)
+            if not parsed_url.path or parsed_url.path in ('', '/'):
+                logger.info(f"⚠️ Skipping homepage: {link[:60]}")
+                continue
+
+            # Deduplicate by domain (one result per store)
+            if domain in seen_domains:
+                logger.info(f"⚠️ Skipping duplicate domain: {domain}")
+                continue
+
             raw_price = item.get('price', '')
             price = self._normalize_price(raw_price)
             has_price = bool(price)
+            source     = item.get('_source', '')
+            is_zyte    = source == 'zyte'
+            is_organic = source == 'oxylabs_organic'
 
-            if not has_price:
-                logger.info(f"⚠️ No price for {seller} - including with link only")
+            # Organic (whole-web UPC search): skip KNOWN_DOMAINS check — any valid store is welcome
+            if not is_organic and domain not in KNOWN_DOMAINS:
+                logger.info(f"⚠️ Skipping unknown domain: {domain}")
+                continue
 
-            seen_sellers.add(seller)
-            logger.info(f"✅ Added offer from {seller}: {'$' + str(price) if has_price else 'sin precio'} - {link[:60]}...")
+            # Skip no-price results from shopping — product page wasn't found
+            # Allow no-price for zyte (agotado) and organic (price visible on site)
+            if not has_price and not is_zyte and not is_organic:
+                logger.info(f"⚠️ No price for {domain} (shopping) - skipping")
+                continue
+
+            seen_domains.add(domain)
+            seller = item.get('_seller') or domain.split('.')[0].capitalize()
+            logger.info(f"✅ Added offer from {seller}: {'$' + str(price) if has_price else 'agotado (Zyte)'} - {link[:60]}...")
 
             image = item.get('thumb') or item.get('image') or item.get('thumbnail') or None
+
+            # Carry through discount pricing from Zyte
+            raw_regular = item.get('regular_price')
+            regular_price = self._normalize_price(raw_regular) if raw_regular else None
 
             offers.append({
                 'title': item.get('title', 'Unknown Product'),
                 'price': price if has_price else None,
+                'regular_price': regular_price,
                 'currency': 'MXN',
                 'seller': seller,
                 'link': link,
                 'image': image,
-                'source': 'oxylabs_shopping',
-                'estimated': not has_price
+                'source': item.get('_source', 'oxylabs_shopping'),
+                'estimated': not has_price,
             })
 
         return {
             'offers': offers,
             'summary': f'Found {len(offers)} offers from Mexican stores (without AI analysis)',
             'total_offers': len(offers),
-            'powered_by': 'oxylabs (no AI)'
+            'powered_by': 'oxylabs (no AI)',
         }
 
     @staticmethod
     def _normalize_price(price_str):
-        """
-        Normalize price string to float
-
-        Args:
-            price_str: Price as string (e.g., "$15.50", "15,50 MXN")
-
-        Returns:
-            float or None: Normalized price
-        """
         if not price_str:
             return None
-
         try:
-            # Remove currency symbols and extra characters
             cleaned = re.sub(r'[^\d.,]', '', str(price_str))
-            # Remove thousands separator (comma)
             cleaned = cleaned.replace(',', '')
             return float(cleaned)
         except (ValueError, TypeError):

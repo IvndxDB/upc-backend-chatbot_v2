@@ -22,6 +22,7 @@ DOMAIN_TO_STORE_NAME = {
     'chedraui.com.mx':              'chedraui',
     'soriana.com.mx':               'soriana',
     'lacomer.com.mx':               'la comer',
+    'yza.mx':                       'farmacias yza',
     'heb.com.mx':                   'heb',
     'costco.com.mx':                'costco',
     'liverpool.com.mx':             'liverpool',
@@ -71,7 +72,9 @@ class OxylabsService:
         if domains and len(domains) > 0:
             results, empty_domains = self._search_per_retailer(upc, description, domains)
         else:
-            results = self._search_broad(upc or description)
+            # Whole-web: Google Search with UPC (exact product identifier, no store filter)
+            broad_query = upc or description
+            results = self._search_broad(broad_query)
             empty_domains = []
 
         return {
@@ -217,14 +220,16 @@ class OxylabsService:
             # Prefer results from the target domain
             on_domain = [r for r in organic if domain in r.get('url', '')]
             if on_domain:
-                return on_domain[:2]
+                return on_domain[:3]
 
-            # Fallback: only accept if result is from a .mx domain or known Mexican retailer
-            top = organic[0].copy()
-            top_url = top.get('url', '').lower()
-            if '.mx' in top_url or any(d in top_url for d in DOMAIN_TO_STORE_NAME):
-                top['_store_hint'] = DOMAIN_TO_STORE_NAME.get(domain, domain)
-                return [top]
+            # Fallback: only accept results from an exact known retailer domain
+            from urllib.parse import urlparse as _urlparse
+            for candidate in organic:
+                cand_domain = _urlparse(candidate.get('url', '')).netloc.lower().replace('www.', '')
+                if cand_domain in DOMAIN_TO_STORE_NAME:
+                    result = candidate.copy()
+                    result['_store_hint'] = DOMAIN_TO_STORE_NAME.get(domain, domain)
+                    return [result]
 
             return []
 
@@ -240,13 +245,46 @@ class OxylabsService:
     # ------------------------------------------------------------------
 
     def _search_broad(self, query):
-        """Single broad search, filtered to Mexican stores"""
+        """Whole-web Google Search by UPC — 2 pages in parallel.
+        First 5 results from page 1 are always included (highest Google relevance).
+        Remaining results are filtered to .com.mx / known Mexican stores.
+        """
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(self._search_broad_page, query, 1)
+            f2 = executor.submit(self._search_broad_page, query, 2)
+            page1 = f1.result() or []
+            page2 = f2.result() or []
+
+        logger.info(f"✅ Broad page 1: {len(page1)} items, page 2: {len(page2)} items")
+
+        # Top 5 from page 1 always pass through (most relevant Google results)
+        top5    = page1[:5]
+        rest    = page1[5:] + page2
+        mx_rest = self._filter_mexican_stores(rest)
+
+        # Combine keeping order, deduplicate by URL
+        seen_urls = set()
+        unique = []
+        for item in top5 + mx_rest:
+            url = item.get('url', '')
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                unique.append(item)
+
+        logger.info(f"✅ Broad search: {len(unique)} results "
+                    f"({len(top5)} top-5 unfiltered + {len(mx_rest)} Mexican filtered)")
+        return unique
+
+    def _search_broad_page(self, query, page=1):
+        """Single page of Google Search (no domain filter) for whole-web UPC lookup"""
         payload = {
             'source': 'google_search',
             'geo_location': 'Mexico',
             'query': query,
             'parse': True,
-            'context': [{'key': 'filter', 'value': 1}]
+            'pages': 1,
+            'start_page': page,
+            'context': [{'key': 'filter', 'value': 1}],
         }
 
         try:
@@ -258,19 +296,16 @@ class OxylabsService:
             )
 
             if response.status_code != 200:
-                logger.error(f"❌ Broad search HTTP {response.status_code}")
+                logger.error(f"❌ Broad page {page} HTTP {response.status_code}: {response.text[:120]}")
                 return []
 
-            organic = self._extract_organic(response.json())
-            filtered = self._filter_mexican_stores(organic)
-            logger.info(f"✅ Broad search: {len(filtered)}/{len(organic)} Mexican results")
-            return filtered
+            return self._extract_organic(response.json())
 
         except requests.Timeout:
-            logger.error("⏱️ Broad search timeout")
+            logger.error(f"⏱️ Broad page {page} timeout")
             return []
         except Exception as e:
-            logger.error(f"❌ Broad search error: {e}")
+            logger.error(f"❌ Broad page {page} error: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -305,7 +340,57 @@ class OxylabsService:
                 if thumb and not thumb.startswith('data:') and thumb.startswith('http'):
                     result['thumb'] = thumb
 
+        for r in organic:
+            if '_source' not in r:
+                r['_source'] = 'oxylabs_organic'
         return organic
+
+    def _extract_shopping(self, data):
+        """Extract items from a google_shopping_search parsed response."""
+        if 'results' not in data or not data['results']:
+            return []
+
+        content = data['results'][0].get('content', {})
+        if not isinstance(content, dict):
+            return []
+
+        results_section = content.get('results', {})
+        if not isinstance(results_section, dict):
+            return []
+
+        items = (
+            list(results_section.get('organic', []))
+            or list(results_section.get('paid', []))
+        )
+
+        normalized = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            url = item.get('url', '')
+            if not url:
+                # Some shopping items expose merchant URL differently
+                merchant = item.get('merchant', {}) or {}
+                url = merchant.get('url', '') or item.get('product_url', '')
+            if not url:
+                continue
+
+            # Map shopping-specific fields to our standard keys
+            price_raw = item.get('price') or item.get('price_raw') or ''
+            title = item.get('title', '') or item.get('name', '')
+            thumb = item.get('thumbnail') or item.get('thumb') or item.get('image') or ''
+            seller = item.get('merchant_name') or item.get('merchant', {}).get('name', '')
+
+            normalized.append({
+                'url': url,
+                'title': title,
+                'price': price_raw,
+                'thumb': thumb if thumb.startswith('http') else '',
+                '_seller': seller,
+                '_source': 'oxylabs_shopping',
+            })
+
+        return normalized
 
     def _filter_mexican_stores(self, results):
         """Keep only results from .mx domains or known Mexican retailers"""
@@ -314,6 +399,7 @@ class OxylabsService:
             'walmart', 'soriana', 'chedraui', 'lacomer', 'heb', 'costco',
             'mercadolibre', 'liverpool', 'coppel', 'elektra', 'sanborns',
             'fahorro', 'benavides', 'guadalajara', 'bodegaaurrera', 'samsclub',
+            'yza.mx',
         ]
 
         kept = []
