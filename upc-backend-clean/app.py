@@ -6,26 +6,61 @@ Upc o descricion
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from functools import wraps
+from functools import wraps, lru_cache
 import re
+import jwt
+from jwt import PyJWKClient
 from logger_config import setup_logger
 from health import get_health_status
 from config import Config
 
 
-def require_api_key(f):
-    """Decorator that validates X-API-Key header on protected endpoints"""
+@lru_cache(maxsize=1)
+def _get_jwks_client():
+    url = (f'https://cognito-idp.{Config.COGNITO_REGION}.amazonaws.com'
+           f'/{Config.COGNITO_USER_POOL_ID}/.well-known/jwks.json')
+    return PyJWKClient(url, cache_keys=True)
+
+
+def _validate_cognito_token(token):
+    try:
+        client = _get_jwks_client()
+        signing_key = client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=['RS256'],
+            audience=Config.COGNITO_CLIENT_ID,
+            issuer=(f'https://cognito-idp.{Config.COGNITO_REGION}.amazonaws.com'
+                    f'/{Config.COGNITO_USER_POOL_ID}'),
+        )
+        groups = payload.get('cognito:groups') or []
+        if Config.COGNITO_REQUIRED_GROUP not in groups:
+            return None, 'Usuario no pertenece al grupo requerido'
+        return payload, None
+    except jwt.ExpiredSignatureError:
+        return None, 'Token expirado'
+    except Exception as e:
+        return None, str(e)
+
+
+def require_cognito_token(f):
+    """Decorator that validates the Cognito Bearer token on protected endpoints."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Allow CORS preflight through without key
         if request.method == 'OPTIONS':
             return f(*args, **kwargs)
-        # Dev mode: no validation if API_KEYS not configured
-        if not Config.API_KEY_REQUIRED:
+        if not Config.COGNITO_AUTH_ENABLED:
             return f(*args, **kwargs)
-        key = request.headers.get('X-API-Key', '')
-        if not key or key not in Config.API_KEYS:
-            return jsonify({'error': 'API key inválida o faltante'}), 401
+        auth = request.headers.get('Authorization', '')
+        if not auth.startswith('Bearer '):
+            return jsonify({'error': 'Token de autenticación requerido'}), 401
+        token = auth[7:]
+        payload, error = _validate_cognito_token(token)
+        if payload is None:
+            logger_ref = setup_logger(__name__)
+            logger_ref.warning(f'⚠️ Token inválido: {error}')
+            return jsonify({'error': f'No autorizado: {error}'}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -135,7 +170,7 @@ def validate_key():
 
 @app.route('/check_price', methods=['POST', 'OPTIONS'])
 @app.route('/api/check_price', methods=['POST', 'OPTIONS'])
-@require_api_key
+@require_cognito_token
 def check_price():
     """
     Two-path search:

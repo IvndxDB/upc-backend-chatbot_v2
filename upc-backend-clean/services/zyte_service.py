@@ -21,7 +21,7 @@ class ZyteService:
         self.api_key = Config.ZYTE_API_KEY
         self.api_url = 'https://api.zyte.com/v1/extract'
         self.timeout = 90
-        self.max_workers = 8
+        self.max_workers = 10
 
     def is_configured(self):
         return bool(self.api_key)
