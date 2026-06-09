@@ -203,44 +203,12 @@ class DataBunkerAPI {
     }
   }
 
-  // --- API Key Management ---
-
-  async getApiKey() {
-    try {
-      const data = await chrome.storage.local.get(['apiKey']);
-      return data.apiKey || null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  async saveApiKey(key) {
-    await chrome.storage.local.set({ apiKey: key });
-  }
-
-  async clearApiKey() {
-    await chrome.storage.local.remove(['apiKey']);
-  }
-
-  async validateApiKey(key) {
-    try {
-      const response = await fetch(`${this.backendUrl}/api/validate-key`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key })
-      });
-      if (!response.ok) return false;
-      const data = await response.json();
-      return data.valid === true;
-    } catch (e) {
-      return false;
-    }
-  }
-
   async _authHeaders() {
-    const key = await this.getApiKey();
     const headers = { 'Content-Type': 'application/json' };
-    if (key) headers['X-API-Key'] = key;
+    try {
+      const session = await cognitoService.getSession();
+      if (session?.idToken) headers['Authorization'] = `Bearer ${session.idToken}`;
+    } catch (_) {}
     return headers;
   }
 
@@ -535,7 +503,7 @@ class DataBunkerAPI {
           })
         });
 
-        if (response.status === 401) throw new Error('Clave de acceso inválida. Por favor recarga la extensión e ingresa tu clave.');
+        if (response.status === 401) throw new Error('Sesión expirada. Por favor cierra sesión y vuelve a iniciarla.');
         if (!response.ok) {
           const errorText = await response.text();
           throw new Error(`Error del servidor: ${response.status} - ${errorText}`);
@@ -596,7 +564,7 @@ class DataBunkerAPI {
       });
 
       if (response.status === 401) {
-        throw new Error('Clave de acceso inválida. Por favor recarga la extensión e ingresa tu clave.');
+        throw new Error('Sesión expirada. Por favor cierra sesión y vuelve a iniciarla.');
       }
       if (!response.ok) {
         const errorText = await response.text();

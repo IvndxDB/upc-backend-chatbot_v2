@@ -18,56 +18,81 @@ class DataBunkerPriceChecker {
   }
 
   async init() {
-    const key = await dataBunkerAPI.getApiKey();
-    if (!key) {
-      this.showActivationScreen();
+    const loggedIn = await cognitoService.isLoggedIn();
+    if (!loggedIn) {
+      this.showCognitoLoginScreen();
       return;
     }
+
     this.bindEvents();
+    this.showUserInHeader();
     this.checkBackendHealth();
     this.showGreeting();
   }
 
-  showActivationScreen() {
-    document.getElementById('activationScreen').classList.remove('hidden');
-    const input = document.getElementById('apiKeyInput');
-    const btn = document.getElementById('activateBtn');
+  showCognitoLoginScreen() {
+    document.getElementById('cognitoLoginScreen').classList.remove('hidden');
+    const emailInput = document.getElementById('cognitoEmail');
+    const passwordInput = document.getElementById('cognitoPassword');
+    const btn = document.getElementById('cognitoLoginBtn');
+    const errorEl = document.getElementById('cognitoError');
 
-    input.addEventListener('input', () => {
-      btn.disabled = !input.value.trim();
-    });
-    btn.addEventListener('click', () => this.handleActivation());
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !btn.disabled) this.handleActivation();
+    const updateBtn = () => {
+      btn.disabled = !emailInput.value.trim() || !passwordInput.value.trim();
+    };
+    emailInput.addEventListener('input', updateBtn);
+    passwordInput.addEventListener('input', updateBtn);
+
+    // Eye button — show password while held down
+    const toggleBtn = document.getElementById('togglePassword');
+    toggleBtn.addEventListener('mousedown', () => { passwordInput.type = 'text'; });
+    toggleBtn.addEventListener('mouseup',   () => { passwordInput.type = 'password'; });
+    toggleBtn.addEventListener('mouseleave',() => { passwordInput.type = 'password'; });
+
+    const doLogin = () => this.handleCognitoLogin(emailInput, passwordInput, btn, errorEl);
+    btn.addEventListener('click', doLogin);
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !btn.disabled) doLogin();
     });
   }
 
-  async handleActivation() {
-    const input = document.getElementById('apiKeyInput');
-    const btn = document.getElementById('activateBtn');
-    const key = input.value.trim();
-    if (!key) return;
+  async handleCognitoLogin(emailInput, passwordInput, btn, errorEl) {
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
 
     btn.disabled = true;
-    btn.textContent = 'Validando...';
+    btn.textContent = 'Iniciando sesión...';
+    errorEl.classList.add('hidden');
 
-    const valid = await dataBunkerAPI.validateApiKey(key);
-    if (valid) {
-      await dataBunkerAPI.saveApiKey(key);
-      document.getElementById('activationScreen').classList.add('hidden');
+    try {
+      await cognitoService.signIn(email, password);
+      document.getElementById('cognitoLoginScreen').classList.add('hidden');
+
       this.bindEvents();
+      this.showUserInHeader();
       this.checkBackendHealth();
       this.showGreeting();
-    } else {
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove('hidden');
       btn.disabled = false;
-      btn.textContent = 'Activar';
-      const existing = document.querySelector('.activation-error');
-      if (existing) existing.remove();
-      const err = document.createElement('p');
-      err.className = 'activation-error';
-      err.textContent = '❌ Clave inválida. Verifica con el administrador.';
-      document.querySelector('.activation-input-wrapper').after(err);
+      btn.textContent = 'Iniciar sesión';
     }
+  }
+
+  async showUserInHeader() {
+    const user = await cognitoService.getCurrentUser();
+    const badge = document.getElementById('userBadge');
+    const emailEl = document.getElementById('userEmail');
+    if (!badge) return;
+    emailEl.textContent = user?.email || user?.name || 'Usuario';
+    badge.classList.remove('hidden');
+    document.getElementById('logoutBtn').addEventListener('click', () => this.handleLogout());
+  }
+
+  async handleLogout() {
+    await cognitoService.signOut();
+    window.location.reload();
   }
 
   bindEvents() {
@@ -704,19 +729,83 @@ class DataBunkerPriceChecker {
       }
     });
 
-    // Add refresh button at the bottom
+    // Action buttons row
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'result-actions';
+
     const refreshBtn = document.createElement('button');
     refreshBtn.className = 'refresh-prices-btn';
-    refreshBtn.innerHTML = '🔄 Actualizar precios';
+    refreshBtn.textContent = '🔄 Actualizar';
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
-      refreshBtn.innerHTML = '⏳ Actualizando...';
+      refreshBtn.textContent = '⏳ Actualizando...';
       await this.refreshSearch(query, productImage, this.currentStoreUrls);
     });
-    resultEl.appendChild(refreshBtn);
+    actionsRow.appendChild(refreshBtn);
+
+    if (stores.length > 0) {
+      const downloadBtn = document.createElement('button');
+      downloadBtn.className = 'download-prices-btn';
+      downloadBtn.textContent = '⬇️ Excel';
+      downloadBtn.addEventListener('click', () => {
+        const blob = this._generateExcel(product, stores);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const name = (product.name || 'precios').replace(/[^a-z0-9]/gi, '_').slice(0, 30);
+        a.download = `${name}_${dateStr}.xlsx`;
+        a.href = url;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+      actionsRow.appendChild(downloadBtn);
+    }
+
+    resultEl.appendChild(actionsRow);
 
     messagesContainer.appendChild(resultEl);
     this.scrollToBottom();
+  }
+
+  _generateExcel(product, stores) {
+    const today = new Date().toLocaleDateString('es-MX', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+    });
+    const upc = product.upc || '';
+    const item = product.name || '';
+
+    const rows = [
+      ['Fecha', 'Retailer', 'UPC', 'Item', 'Precio S/D', 'Precio C/D', 'URL', 'URL Imagen'],
+    ];
+
+    for (const store of stores) {
+      const hasDiscount = store.regular_price != null && store.regular_price !== store.price;
+      const precioSD = hasDiscount ? store.regular_price : (store.price ?? '');
+      const precioCD = hasDiscount ? store.price : '';
+      rows.push([
+        today,
+        store.store || '',
+        upc,
+        item,
+        precioSD,
+        precioCD,
+        store.url || '',
+        store.image || '',
+      ]);
+    }
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 40 },
+      { wch: 12 }, { wch: 12 }, { wch: 60 }, { wch: 60 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Precios');
+
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    return new Blob([wbout], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
   }
 
   async refreshSearch(query, image = null, storeUrls = {}) {

@@ -28,9 +28,12 @@ class Config:
     VERSION = "5.1.0"
     PLATFORM = os.environ.get('PLATFORM', 'ECS')
 
-    # User authentication via API keys (comma-separated in env var)
-    API_KEYS = [k.strip() for k in os.environ.get('API_KEYS', '').split(',') if k.strip()]
-    API_KEY_REQUIRED = bool(API_KEYS)  # False in dev mode (no env var set)
+    # Cognito authentication
+    COGNITO_REGION      = os.environ.get('COGNITO_REGION', 'us-east-1')
+    COGNITO_USER_POOL_ID = os.environ.get('COGNITO_USER_POOL_ID', 'us-east-1_rQThsc99E')
+    COGNITO_CLIENT_ID   = os.environ.get('COGNITO_CLIENT_ID', '5fnkj569pk2qnf4cbga2plj14p')
+    COGNITO_REQUIRED_GROUP = os.environ.get('COGNITO_REQUIRED_GROUP', 'addon')
+    COGNITO_AUTH_ENABLED = os.environ.get('COGNITO_AUTH_ENABLED', 'true').lower() == 'true'
 
     @classmethod
     def validate(cls):
@@ -66,6 +69,6 @@ class Config:
             "DEBUG": cls.DEBUG,
             "VERSION": cls.VERSION,
             "PLATFORM": cls.PLATFORM,
-            "API_KEY_REQUIRED": cls.API_KEY_REQUIRED,
-            "API_KEYS_COUNT": len(cls.API_KEYS)
+            "COGNITO_AUTH_ENABLED": cls.COGNITO_AUTH_ENABLED,
+            "COGNITO_USER_POOL_ID": cls.COGNITO_USER_POOL_ID
         }
