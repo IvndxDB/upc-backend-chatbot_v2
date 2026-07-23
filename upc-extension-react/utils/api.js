@@ -87,12 +87,151 @@ const AVAILABLE_STORES = [
     url: 'https://www.yza.mx/',
     logo: '💊',
     color: '#00529B'
+  },
+  {
+    id: 'heb',
+    name: 'HEB',
+    domain: 'heb.com.mx',
+    url: 'https://www.heb.com.mx/',
+    logo: '🏪',
+    color: '#C8102E'
+  },
+  {
+    id: 'liverpool',
+    name: 'Liverpool',
+    domain: 'liverpool.com.mx',
+    url: 'https://www.liverpool.com.mx/',
+    logo: '🛍️',
+    color: '#E31E24'
+  },
+  {
+    id: 'sanborns',
+    name: 'Sanborns',
+    domain: 'sanborns.com.mx',
+    url: 'https://www.sanborns.com.mx/',
+    logo: '🏬',
+    color: '#F15A22'
+  },
+  {
+    id: 'sephora',
+    name: 'Sephora',
+    domain: 'sephora.com.mx',
+    url: 'https://www.sephora.com.mx/',
+    logo: '💄',
+    color: '#000000'
+  },
+  {
+    id: 'dermaexpress',
+    name: 'Derma Express',
+    domain: 'dermaexpress.com.mx',
+    url: 'https://www.dermaexpress.com.mx/',
+    logo: '🧴',
+    color: '#E91E8C'
+  },
+  {
+    id: 'prixz',
+    name: 'Prixz',
+    domain: 'prixz.com',
+    url: 'https://www.prixz.com/',
+    logo: '💊',
+    color: '#FF6B35'
+  },
+  {
+    id: 'farmaciaalicia',
+    name: 'Farmacia Alicia',
+    domain: 'farmaciaalicia.com.mx',
+    url: 'https://www.farmaciaalicia.com.mx/',
+    logo: '💊',
+    color: '#E31E24'
+  },
+  {
+    id: 'mercadolibre',
+    name: 'Mercado Libre',
+    domain: 'mercadolibre.com.mx',
+    url: 'https://www.mercadolibre.com.mx/',
+    logo: '🛒',
+    color: '#FFE600'
+  },
+  {
+    id: 'fesa',
+    name: 'Farmacias Esp.',
+    domain: 'farmaciasespecializadas.com',
+    url: 'https://www.farmaciasespecializadas.com/',
+    logo: '💊',
+    color: '#2E86AB'
+  },
+  {
+    id: 'farmaciacoyoacan',
+    name: 'Fcia. Coyoacán',
+    domain: 'farmaciacoyoacan.com',
+    url: 'https://farmaciacoyoacan.com/',
+    logo: '💊',
+    color: '#4CAF50'
   }
 ];
 
+// ─── Group → stores + dictionary mapping ───────────────────────────────────
+// Add a key here for each new Cognito group.
+// stores: array of AVAILABLE_STORES ids (null or absent = all stores)
+// dictionaries: array of dictionary file names (without 'diccionario_' prefix)
+const GROUP_PROFILES = {
+  addon: {
+    stores: [
+      'amazon', 'walmart', 'soriana', 'chedraui', 'fahorro',
+      'farmaciasanpablo', 'benavides', 'farmaciasguadalajara', 'lacomer', 'yza',
+    ],
+    dictionaries: ['ext'],
+  },
+  addon_beauty: {
+    stores: [
+      'amazon', 'walmart', 'fahorro', 'farmaciasanpablo', 'mercadolibre',
+      'yza', 'liverpool', 'sanborns', 'sephora', 'dermaexpress',
+    ],
+    dictionaries: ['beauty'],
+  },
+  addon_especializadas: {
+    stores: [
+      'farmaciasanpablo', 'yza', 'fahorro', 'fesa', 'farmaciacoyoacan',
+      'farmaciasguadalajara', 'benavides', 'prixz', 'amazon', 'walmart',
+    ],
+    dictionaries: ['farma_esp'],
+  },
+};
+
+// Resolved profile cache (reset on sign-out via page reload)
+let _userProfileCache = null;
+
+async function _resolveUserProfile() {
+  if (_userProfileCache) return _userProfileCache;
+
+  const groups = await cognitoService.getUserGroups();
+  const profileGroups = groups.filter(g => GROUP_PROFILES[g]);
+
+  if (profileGroups.length === 0) {
+    // Unknown group → safe default: all stores + ext
+    _userProfileCache = { allowedStores: null, dictionaries: ['ext'] };
+  } else if (profileGroups.length > 1) {
+    // Multiple groups (addon + addon_beauty) → all stores + all dictionaries
+    const dicts = [...new Set(profileGroups.flatMap(g => GROUP_PROFILES[g].dictionaries || ['ext']))];
+    _userProfileCache = { allowedStores: null, dictionaries: dicts };
+  } else {
+    // Single group → use its stores + dictionaries
+    const g = profileGroups[0];
+    _userProfileCache = {
+      allowedStores: GROUP_PROFILES[g].stores || null,
+      dictionaries: GROUP_PROFILES[g].dictionaries || ['ext'],
+    };
+  }
+
+  console.log('👤 User profile:', _userProfileCache);
+  return _userProfileCache;
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 // --- Fuzzy Search (local dictionary) ---
 
-let _dictionary = null;
+// Cache per dictionary name: { ext: [...], beauty: [...] }
+const _dictCache = {};
 
 function _normStr(str) {
   return str.toLowerCase()
@@ -102,33 +241,43 @@ function _normStr(str) {
     .trim();
 }
 
-async function _loadDictionary() {
-  if (_dictionary) return _dictionary;
+async function _loadOneDictionary(name) {
+  if (_dictCache[name]) return _dictCache[name];
   try {
-    const url = chrome.runtime.getURL('diccionario_ext.json');
+    const url = chrome.runtime.getURL(`diccionario_${name}.json`);
     const res = await fetch(url);
-    if (!res.ok) {
-      console.error('Dictionary fetch failed:', res.status, url);
-      return [];
-    }
+    if (!res.ok) { console.error('Dictionary fetch failed:', res.status, url); return []; }
     const buffer = await res.arrayBuffer();
     const text = new TextDecoder('utf-8').decode(buffer);
-    _dictionary = JSON.parse(text);
-    console.log('📖 Dictionary loaded:', _dictionary.length, 'items');
-    return _dictionary;
+    _dictCache[name] = JSON.parse(text);
+    console.log(`📖 Dictionary "${name}" loaded:`, _dictCache[name].length, 'items');
+    return _dictCache[name];
   } catch (e) {
-    console.error('Failed to load dictionary:', e);
+    console.error(`Failed to load dictionary "${name}":`, e);
     return [];
   }
 }
 
+async function _getUserDictionaries() {
+  const profile = await _resolveUserProfile();
+  const names = (profile.dictionaries && profile.dictionaries.length) ? profile.dictionaries : ['ext'];
+  const arrays = await Promise.all(names.map(_loadOneDictionary));
+  return arrays.flat();
+}
+
 async function dictionaryLookupByUPC(upc) {
-  const items = await _loadDictionary();
-  return items.find(item => item.UPC === upc) || null;
+  const items = await _getUserDictionaries();
+  const matches = items.filter(item => item.UPC === upc);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+  // Merge entries from multiple dictionaries: combine all URLs
+  const merged = { ...matches[0] };
+  merged.urls = [...new Set(matches.flatMap(m => m.urls || []))];
+  return merged;
 }
 
 async function fuzzySearch(query, maxResults = 15) {
-  const items = await _loadDictionary();
+  const items = await _getUserDictionaries();
   const normQuery = _normStr(query);
   const queryWords = normQuery.split(' ').filter(w => w.length > 2);
   if (queryWords.length === 0) return [];
@@ -141,11 +290,13 @@ async function fuzzySearch(query, maxResults = 15) {
       if (normItem.includes(word)) matchCount++;
     }
     if (matchCount > 0) {
-      scored.push({ ...item, _score: matchCount / queryWords.length });
+      const fuzzy   = matchCount / queryWords.length;
+      const urlBoost = Math.log1p(item.urls?.length || 0) * 0.2;
+      scored.push({ ...item, _score: fuzzy + urlBoost });
     }
   }
 
-  // Sort: highest score first, then shorter name (more specific)
+  // Sort: combined (fuzzy + url count boost) descending
   scored.sort((a, b) => b._score - a._score || a.Item.length - b.Item.length);
   return scored.slice(0, maxResults);
 }
@@ -236,10 +387,14 @@ class DataBunkerAPI {
   }
 
   /**
-   * Get available stores for selection
+   * Get stores available to the current user.
+   * Derived from Cognito group membership via GROUP_PROFILES.
+   * Returns all stores if the user has no profile group (addon default).
    */
-  getAvailableStores() {
-    return AVAILABLE_STORES;
+  async getAvailableStores() {
+    const profile = await _resolveUserProfile();
+    if (!profile.allowedStores) return AVAILABLE_STORES;
+    return AVAILABLE_STORES.filter(s => profile.allowedStores.includes(s.id));
   }
 
   /**
@@ -267,6 +422,18 @@ class DataBunkerAPI {
       console.log('💾 Saved selected stores:', storeIds);
     } catch (error) {
       console.error('Error saving selected stores:', error);
+    }
+  }
+
+  async getUsage() {
+    try {
+      const res = await fetch(`${this.backendUrl}/api/usage`, {
+        headers: await this._authHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json(); // {count, limit, remaining}
+    } catch (e) {
+      return null;
     }
   }
 
@@ -457,7 +624,9 @@ class DataBunkerAPI {
       selectedStores = null,
       productImage = null,
       storeUrls = {},       // {domain: url} from local dictionary for Zyte
-      wholeWeb = false      // true = no domain filter, search all of Google Shopping
+      wholeWeb = false,     // true = no domain filter, search all of Google Shopping
+      skipUsage = false,    // true = skip usage increment (per-store calls after first)
+      noCache = false       // true = skip cache read AND write (per-store progressive calls)
     } = options;
 
     const {
@@ -530,8 +699,8 @@ class DataBunkerAPI {
       console.log('🏪 Searching in stores:', storeIds);
       console.log('🌐 Domains:', domains);
 
-      // Check cache first (unless forceRefresh is true)
-      if (!forceRefresh) {
+      // Check cache first (skip if forceRefresh or noCache)
+      if (!forceRefresh && !noCache) {
         onStatus('Buscando en cache...');
         const cachedResult = await this.getCachedResults(query, upc);
 
@@ -559,7 +728,8 @@ class DataBunkerAPI {
           upc,
           search_type: sources.oxylabs ? 'shopping' : 'organic',
           domains: domains.length > 0 ? domains : null,
-          store_urls: storeUrls
+          store_urls: storeUrls,
+          skip_usage: skipUsage
         })
       });
 
@@ -574,8 +744,10 @@ class DataBunkerAPI {
       const data = await response.json();
       const result = this._transformResponse(data, query, upc, productImage);
 
-      // Save to cache
-      await this.setCachedResults(query, upc, result);
+      // Save to cache (skip for per-store calls to avoid partial results polluting cache)
+      if (!noCache) {
+        await this.setCachedResults(query, upc, result);
+      }
 
       // Call onComplete with transformed result
       onComplete(result);

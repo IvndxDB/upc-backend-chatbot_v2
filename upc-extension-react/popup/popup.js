@@ -14,6 +14,11 @@ class DataBunkerPriceChecker {
     this.pendingStoreUrls = {}; // {domain: url} from dictionary for Zyte
     this.pendingWholeWeb = false; // true when "buscar en toda la web" is clicked
 
+    // Multi-search state
+    this.multiSearchMode = false;
+    this.multiItems = []; // [{text, query, upc, image, storeUrls}] — after resolution
+    this.multiSearchPending = null; // resolved items waiting for store selection
+
     this.init();
   }
 
@@ -88,6 +93,20 @@ class DataBunkerPriceChecker {
     emailEl.textContent = user?.email || user?.name || 'Usuario';
     badge.classList.remove('hidden');
     document.getElementById('logoutBtn').addEventListener('click', () => this.handleLogout());
+    this._updateUsageCounter();
+  }
+
+  async _updateUsageCounter(usageData = null) {
+    const el = document.getElementById('usageCounter');
+    if (!el) return;
+    const usage = usageData || await dataBunkerAPI.getUsage();
+    // remaining===9999 means Supabase is unavailable — hide counter
+    if (!usage || usage.remaining === 9999) { el.textContent = ''; return; }
+    const { count, limit, remaining } = usage;
+    el.textContent = `${count}/${limit}`;
+    el.className = 'usage-counter';
+    if (remaining <= 0)        el.classList.add('danger');
+    else if (remaining <= 10)  el.classList.add('warning');
   }
 
   async handleLogout() {
@@ -104,7 +123,11 @@ class DataBunkerPriceChecker {
     userInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        this.sendMessage();
+        if (this.multiSearchMode) {
+          this._commitMultiInputText(); // async — intentionally not awaited (fire-and-show)
+        } else {
+          this.sendMessage();
+        }
       }
     });
     userInput.addEventListener('input', () => this.updateSendButton());
@@ -115,15 +138,252 @@ class DataBunkerPriceChecker {
       userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
     });
 
+    // Paste: in multi-mode, split comma-separated values into chips
+    userInput.addEventListener('paste', (e) => {
+      if (!this.multiSearchMode) return;
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      if (!text.includes(',')) return; // let normal paste handle single items
+      e.preventDefault();
+      const parts = text.split(',').map(s => s.trim()).filter(Boolean);
+      parts.forEach(p => this._addMultiChip(p));
+    });
+
+    // Multi-search toggle
+    document.getElementById('multiSearchBtn').addEventListener('click', () => {
+      this.toggleMultiSearchMode();
+    });
+
+    // Close dropdown when clicking outside input area
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('multiDropdown');
+      if (!dd || dd.classList.contains('hidden')) return;
+      if (!e.target.closest('.input-area')) this._hideMultiDropdown();
+    });
+
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
-
   }
 
   updateSendButton() {
     const userInput = document.getElementById('userInput');
     const sendBtn = document.getElementById('sendBtn');
-    sendBtn.disabled = !userInput.value.trim() && !this.currentScrapedData && !this.currentScreenshot;
+    if (this.multiSearchMode) {
+      sendBtn.disabled = this.multiItems.length === 0 && !userInput.value.trim();
+    } else {
+      sendBtn.disabled = !userInput.value.trim() && !this.currentScrapedData && !this.currentScreenshot;
+    }
+  }
+
+  toggleMultiSearchMode() {
+    this.multiSearchMode = !this.multiSearchMode;
+    const btn = document.getElementById('multiSearchBtn');
+    const tagsArea = document.getElementById('multiTagsArea');
+    const userInput = document.getElementById('userInput');
+
+    if (this.multiSearchMode) {
+      btn.classList.add('active');
+      btn.title = 'Desactivar búsqueda múltiple';
+      tagsArea.classList.remove('hidden');
+      userInput.placeholder = 'Agrega un producto (Enter) o pega UPCs separados por coma...';
+    } else {
+      btn.classList.remove('active');
+      btn.title = 'Búsqueda múltiple';
+      tagsArea.classList.add('hidden');
+      this.multiItems = [];
+      userInput.placeholder = 'Escribe el nombre del producto o pega informacion...';
+    }
+    this.updateSendButton();
+  }
+
+  _addMultiChip(itemOrText) {
+    let item;
+    if (typeof itemOrText === 'string') {
+      const text = itemOrText.trim();
+      if (!text) return;
+      item = { text, query: text, upc: null, image: null, storeUrls: {}, confirmed: false };
+    } else {
+      item = itemOrText;
+    }
+    if (!item.text) return;
+    if (this.multiItems.some(i => i.text === item.text)) return;
+    this.multiItems.push(item);
+    this._renderMultiTags();
+    this.updateSendButton();
+  }
+
+  async _commitMultiInputText() {
+    const userInput = document.getElementById('userInput');
+    const val = userInput.value.trim();
+    if (!val) return;
+
+    const isBarcode = /^\d{8,14}$/.test(val);
+
+    if (isBarcode) {
+      // Resolve UPC against dictionary immediately
+      const found = await dictionaryLookupByUPC(val);
+      if (found) {
+        this._addMultiChip({
+          text: found.Item,
+          query: found.Item,
+          upc: found.UPC,
+          image: found.image || null,
+          storeUrls: buildStoreUrlsFromEntry(found),
+          confirmed: true,
+        });
+      } else {
+        this._addMultiChip({ text: val, query: '', upc: val, image: null, storeUrls: {}, confirmed: false });
+      }
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      return;
+    }
+
+    // Description: fuzzy search → show inline dropdown
+    const matches = await fuzzySearch(val, 15);
+    if (matches.length === 0) {
+      // No matches → add raw
+      this._addMultiChip(val);
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      return;
+    }
+
+    this._showMultiFuzzyDropdown(val, matches, userInput);
+  }
+
+  _showMultiFuzzyDropdown(rawText, matches, userInput) {
+    const PAGE_SIZE = 5;
+    const totalPages = Math.ceil(matches.length / PAGE_SIZE);
+    let currentPage = 0;
+
+    const dd = document.getElementById('multiDropdown');
+    dd.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'multi-dropdown-header';
+    header.textContent = `Elige el producto para "${rawText}"`;
+    dd.appendChild(header);
+
+    // Items container
+    const itemsContainer = document.createElement('div');
+    dd.appendChild(itemsContainer);
+
+    // Pagination row (only if more than one page)
+    const paginationRow = document.createElement('div');
+    paginationRow.className = 'multi-dropdown-pagination';
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'multi-dd-page-btn';
+    prevBtn.textContent = '←';
+    const pageLabel = document.createElement('span');
+    pageLabel.className = 'multi-dd-page-label';
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'multi-dd-page-btn';
+    nextBtn.textContent = '→';
+    paginationRow.appendChild(prevBtn);
+    paginationRow.appendChild(pageLabel);
+    paginationRow.appendChild(nextBtn);
+    if (totalPages > 1) dd.appendChild(paginationRow);
+
+    // "Search as-is" option
+    const skip = document.createElement('div');
+    skip.className = 'multi-dropdown-item multi-dropdown-skip';
+    skip.textContent = `🔎 Buscar "${rawText}" tal como está`;
+    skip.addEventListener('click', () => {
+      this._addMultiChip(rawText);
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      this._hideMultiDropdown();
+    });
+    dd.appendChild(skip);
+
+    const renderPage = () => {
+      itemsContainer.innerHTML = '';
+      const start = currentPage * PAGE_SIZE;
+      const end = Math.min(start + PAGE_SIZE, matches.length);
+      for (let i = start; i < end; i++) {
+        const m = matches[i];
+        const row = document.createElement('div');
+        row.className = 'multi-dropdown-item';
+        if (m.image) {
+          const img = document.createElement('img');
+          img.src = m.image;
+          img.addEventListener('error', () => { img.style.display = 'none'; });
+          row.appendChild(img);
+        }
+        const name = document.createElement('span');
+        name.className = 'dd-name';
+        name.textContent = m.Item;
+        row.appendChild(name);
+        if (m.UPC) {
+          const upc = document.createElement('span');
+          upc.className = 'dd-upc';
+          upc.textContent = m.UPC;
+          row.appendChild(upc);
+        }
+        row.addEventListener('click', () => {
+          this._addMultiChip({
+            text: m.Item,
+            query: m.Item,
+            upc: m.UPC || null,
+            image: m.image || null,
+            storeUrls: buildStoreUrlsFromEntry(m),
+            confirmed: true,
+          });
+          userInput.value = '';
+          userInput.style.height = 'auto';
+          this._hideMultiDropdown();
+        });
+        itemsContainer.appendChild(row);
+      }
+      pageLabel.textContent = `${currentPage + 1} / ${totalPages}`;
+      prevBtn.disabled = currentPage === 0;
+      nextBtn.disabled = currentPage >= totalPages - 1;
+    };
+
+    prevBtn.addEventListener('click', () => {
+      if (currentPage > 0) { currentPage--; renderPage(); }
+    });
+    nextBtn.addEventListener('click', () => {
+      if (currentPage < totalPages - 1) { currentPage++; renderPage(); }
+    });
+
+    renderPage();
+    dd.classList.remove('hidden');
+  }
+
+  _hideMultiDropdown() {
+    document.getElementById('multiDropdown').classList.add('hidden');
+  }
+
+  _removeMultiChip(index) {
+    this.multiItems.splice(index, 1);
+    this._renderMultiTags();
+    this.updateSendButton();
+  }
+
+  _renderMultiTags() {
+    const tagsArea = document.getElementById('multiTagsArea');
+    tagsArea.innerHTML = '';
+    if (this.multiItems.length === 0) {
+      tagsArea.classList.add('empty');
+      return;
+    }
+    tagsArea.classList.remove('empty');
+    this.multiItems.forEach((item, idx) => {
+      const chip = document.createElement('span');
+      chip.className = `multi-tag${item.confirmed ? '' : ' raw'}`;
+      const textSpan = document.createElement('span');
+      textSpan.className = 'multi-tag-text';
+      textSpan.textContent = item.text;
+      chip.appendChild(textSpan);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'multi-tag-remove';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', () => this._removeMultiChip(idx));
+      chip.appendChild(removeBtn);
+      tagsArea.appendChild(chip);
+    });
   }
 
   async checkBackendHealth() {
@@ -149,6 +409,16 @@ class DataBunkerPriceChecker {
   }
 
   async sendMessage() {
+    if (this.multiSearchMode) {
+      // If dropdown is open, don't send yet (user is picking)
+      const dd = document.getElementById('multiDropdown');
+      if (dd && !dd.classList.contains('hidden')) return;
+      // Commit any remaining typed text, then launch multi-search
+      await this._commitMultiInputText();
+      if (this.multiItems.length > 0) await this.sendMultiMessage();
+      return;
+    }
+
     const userInput = document.getElementById('userInput');
     const message = userInput.value.trim();
 
@@ -312,6 +582,146 @@ class DataBunkerPriceChecker {
     this.scrollToBottom();
   }
 
+  async sendMultiMessage() {
+    const items = [...this.multiItems]; // already resolved at chip-add time
+    this.addMessage('user', `🔍 Búsqueda múltiple: ${items.length} producto${items.length !== 1 ? 's' : ''}`);
+
+    // Clear chips
+    this.multiItems = [];
+    this._renderMultiTags();
+    this.updateSendButton();
+
+    this.multiSearchPending = items.map(i => ({
+      label: i.text,
+      query: i.query,
+      upc: i.upc,
+      image: i.image || null,
+      storeUrls: i.storeUrls || {},
+    }));
+    await this.showStoreSelectorInChat();
+  }
+
+  async runMultiSearchBatch(items) {
+    const total = items.length;
+    let done = 0;
+    const allResults = []; // for download-all
+
+    const messagesEl = document.getElementById('messages');
+
+    const progressEl = document.createElement('div');
+    progressEl.className = 'multi-progress-banner';
+    const progressLeft = document.createElement('div');
+    progressLeft.className = 'multi-progress-left';
+    const progressSpinner = document.createElement('div');
+    progressSpinner.className = 'multi-progress-spinner';
+    const progressText = document.createElement('span');
+    progressText.textContent = `Buscando ${total} producto${total !== 1 ? 's' : ''}...`;
+    progressLeft.appendChild(progressSpinner);
+    progressLeft.appendChild(progressText);
+    progressEl.appendChild(progressLeft);
+    messagesEl.appendChild(progressEl);
+    this.scrollToBottom();
+
+    const updateProgress = () => {
+      const remaining = total - done;
+      // Re-anchor banner below all results
+      messagesEl.appendChild(progressEl);
+      if (remaining === 0) {
+        progressEl.classList.add('done');
+        progressText.textContent = `✅ ${total} producto${total !== 1 ? 's' : ''} encontrado${total !== 1 ? 's' : ''}`;
+      } else {
+        progressText.textContent = `Buscando ${remaining} de ${total} producto${total !== 1 ? 's' : ''} restante${remaining !== 1 ? 's' : ''}...`;
+      }
+    };
+
+    await Promise.all(items.map((item) => new Promise((resolve) => {
+      dataBunkerAPI.streamPriceCheck(
+        item.query,
+        {
+          scrapedData: item.upc ? { upc: item.upc } : null,
+          selectedStores: this.selectedStores.length > 0 ? this.selectedStores : null,
+          productImage: item.image || null,
+          storeUrls: item.storeUrls || {},
+          wholeWeb: item.wholeWeb || false,
+        },
+        {
+          onStatus: () => {},
+          onProduct: () => {},
+          onPrice: () => {},
+          onComplete: (result) => {
+            if (!result.product.name && item.query) result.product.name = item.query;
+            if (!result.product.upc && item.upc) result.product.upc = item.upc;
+            done++;
+            allResults.push({ product: result.product, stores: result.stores || [] });
+            updateProgress();
+            this.displayPriceResult(result, item.query || item.upc || '');
+            messagesEl.appendChild(progressEl); // keep banner at bottom after result card
+            this._updateUsageCounter();
+            this.scrollToBottom();
+            resolve();
+          },
+          onError: (error) => {
+            done++;
+            updateProgress();
+            this.addMessage('bot', `❌ Error buscando "${item.label || item.query || item.upc}": ${error}`, true);
+            messagesEl.appendChild(progressEl);
+            this.scrollToBottom();
+            resolve();
+          }
+        }
+      );
+    })));
+
+    // Add download-all button when batch is complete
+    const allStores = allResults.flatMap(r => r.stores);
+    if (allStores.length > 0) {
+      const downloadAllBtn = document.createElement('button');
+      downloadAllBtn.className = 'download-all-btn';
+      downloadAllBtn.textContent = '⬇️ Descargar todo';
+      downloadAllBtn.addEventListener('click', () => {
+        const blob = this._generateExcelMulti(allResults);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const dateStr = new Date().toISOString().slice(0, 10);
+        a.download = `busqueda_multiple_${dateStr}.xlsx`;
+        a.href = url;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+      progressEl.appendChild(downloadAllBtn);
+    }
+    this.scrollToBottom();
+  }
+
+  _generateExcelMulti(items) {
+    const today = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const rows = [['Fecha', 'Retailer', 'UPC', 'Item', 'Precio S/D', 'Precio C/D', 'URL', 'URL Imagen']];
+    for (const { product, stores } of items) {
+      for (const store of stores) {
+        const hasDiscount = store.regular_price != null && store.regular_price !== store.price;
+        rows.push([
+          today,
+          store.store || '',
+          product.upc || '',
+          product.name || '',
+          hasDiscount ? store.regular_price : (store.price ?? ''),
+          hasDiscount ? store.price : '',
+          store.url || '',
+          store.image || '',
+        ]);
+      }
+    }
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 40 },
+      { wch: 12 }, { wch: 12 }, { wch: 60 }, { wch: 60 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Precios');
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
   async processPriceCheck(input) {
     this.isProcessing = true;
     this.showLoading('Iniciando busqueda de precios...');
@@ -372,6 +782,7 @@ class DataBunkerPriceChecker {
             this.hideLoading();
             this.displayPriceResult(result, input);
             this.clearContextData();
+            this._updateUsageCounter();
           },
           onError: (error) => {
             this.removeTypingIndicator(typingId);
@@ -388,6 +799,238 @@ class DataBunkerPriceChecker {
       this.clearContextData();
     }
 
+    this.isProcessing = false;
+  }
+
+  async processPriceCheckProgressive(input) {
+    const storeUrls   = this.pendingStoreUrls || {};
+    const wholeWeb    = this.pendingWholeWeb  || false;
+    const scrapedData = this.pendingUPC
+      ? { ...(this.currentScrapedData || {}), upc: this.pendingUPC }
+      : this.currentScrapedData;
+    const productImage = this.pendingImage || null;
+
+    this.currentStoreUrls  = storeUrls;
+    this.pendingUPC        = null;
+    this.pendingImage      = null;
+    this.pendingStoreUrls  = {};
+    this.pendingWholeWeb   = false;
+    this.isProcessing      = true;
+
+    const messagesEl = document.getElementById('messages');
+    const typingId   = this.addTypingIndicator();
+
+    // ── Whole-web: single non-progressive request ──────────────────────────
+    if (wholeWeb) {
+      this.showLoading('Consultando precios en toda la web...');
+      try {
+        await dataBunkerAPI.streamPriceCheck(input, {
+          scrapedData, productImage, storeUrls: {}, wholeWeb: true, selectedStores: null,
+        }, {
+          onStatus:   msg => this.updateLoading(msg),
+          onComplete: result => {
+            this.removeTypingIndicator(typingId);
+            this.hideLoading();
+            this.displayPriceResult(result, input);
+            this.clearContextData();
+            this._updateUsageCounter();
+          },
+          onError: err => {
+            this.removeTypingIndicator(typingId);
+            this.hideLoading();
+            this.addMessage('bot', `Error: ${err}`, true);
+            this.clearContextData();
+          },
+        });
+      } catch (e) {
+        this.removeTypingIndicator(typingId);
+        this.hideLoading();
+        this.addMessage('bot', `Error: ${e.message}`, true);
+      }
+      this.isProcessing = false;
+      return;
+    }
+
+    // ── Per-store progressive search ───────────────────────────────────────
+    this.removeTypingIndicator(typingId);
+    this.hideLoading();
+
+    const availableStores = await dataBunkerAPI.getAvailableStores();
+    const selectedIds     = this.selectedStores.length > 0
+      ? this.selectedStores
+      : await dataBunkerAPI.getSelectedStores();
+
+    if (selectedIds.length === 0) {
+      this.addMessage('bot', 'No hay tiendas seleccionadas.', true);
+      this.isProcessing = false;
+      return;
+    }
+
+    // If using dictionary URLs, only search stores that actually have a URL for this product
+    const hasDictionary = Object.keys(storeUrls).length > 0;
+    const storeIdsToSearch = hasDictionary
+      ? selectedIds.filter(id => {
+          const s = availableStores.find(s => s.id === id);
+          return s?.domain && storeUrls[s.domain];
+        })
+      : selectedIds;
+
+    if (storeIdsToSearch.length === 0) {
+      this.addMessage('bot', 'Este producto no está disponible en las tiendas seleccionadas.', true);
+      this.clearContextData();
+      this.isProcessing = false;
+      return;
+    }
+
+    // ── Cache key (same logic as streamPriceCheck) ────────────────────────
+    const _rawInput = input || scrapedData?.productName || scrapedData?.name || '';
+    const _isBarcode = /^\d{8,14}$/.test(_rawInput.trim());
+    const _cacheQuery = _isBarcode ? '' : _rawInput;
+    const _cacheUpc   = _isBarcode ? _rawInput.trim() : (scrapedData?.upc || '');
+
+    // Check cache before starting progressive search
+    const _cached = await dataBunkerAPI.getCachedResults(_cacheQuery, _cacheUpc);
+    if (_cached) {
+      this.displayPriceResult(_cached, input);
+      this.clearContextData();
+      this._updateUsageCounter();
+      this.isProcessing = false;
+      return;
+    }
+
+    // ── No dictionary: single Oxylabs call with all stores (1 usage count) ──
+    if (!hasDictionary) {
+      const t2 = this.addTypingIndicator();
+      this.showLoading(`Buscando en ${storeIdsToSearch.length} tiendas...`);
+      try {
+        await dataBunkerAPI.streamPriceCheck(input, {
+          scrapedData,
+          selectedStores: storeIdsToSearch,
+          productImage,
+          storeUrls: {},
+          wholeWeb: false,
+        }, {
+          onStatus:   msg => this.updateLoading(msg),
+          onComplete: result => {
+            this.removeTypingIndicator(t2);
+            this.hideLoading();
+            this.displayPriceResult(result, input);
+            this.clearContextData();
+            this._updateUsageCounter();
+          },
+          onError: err => {
+            this.removeTypingIndicator(t2);
+            this.hideLoading();
+            this.addMessage('bot', `Error: ${err}`, true);
+            this.clearContextData();
+          },
+        });
+      } catch (e) {
+        this.removeTypingIndicator(t2);
+        this.hideLoading();
+        this.addMessage('bot', `Error: ${e.message}`, true);
+      }
+      this.isProcessing = false;
+      return;
+    }
+
+    const total    = storeIdsToSearch.length;
+    let done       = 0;
+    const allStores = [];
+    let productInfo = null;
+    let liveCardEl  = null;
+
+    // Progress banner
+    const progressEl    = document.createElement('div');
+    progressEl.className = 'multi-progress-banner';
+    const progressLeft  = document.createElement('div');
+    progressLeft.className = 'multi-progress-left';
+    const progressSpinner = document.createElement('div');
+    progressSpinner.className = 'multi-progress-spinner';
+    const progressText  = document.createElement('span');
+    progressText.textContent = `Buscando en ${total} tienda${total !== 1 ? 's' : ''}...`;
+    progressLeft.appendChild(progressSpinner);
+    progressLeft.appendChild(progressText);
+    progressEl.appendChild(progressLeft);
+    messagesEl.appendChild(progressEl);
+    this.scrollToBottom();
+
+    const updateCard = () => {
+      const pImg   = allStores.find(s => s.image)?.image || productImage;
+      const newCard = this._buildResultCard(productInfo || {}, allStores, input, pImg, storeUrls);
+      if (liveCardEl && liveCardEl.parentNode === messagesEl) {
+        messagesEl.replaceChild(newCard, liveCardEl);
+      } else {
+        messagesEl.insertBefore(newCard, progressEl);
+      }
+      liveCardEl = newCard;
+    };
+
+    const updateProgress = () => {
+      messagesEl.appendChild(progressEl);
+      if (done >= total) {
+        progressEl.classList.add('done');
+        progressSpinner.style.display = 'none';
+        const found = allStores.filter(s => !s.estimated && s.price != null).length;
+        progressText.textContent = `✅ ${found} precio${found !== 1 ? 's' : ''} encontrado${found !== 1 ? 's' : ''} en ${total} tienda${total !== 1 ? 's' : ''}`;
+      } else {
+        progressText.textContent = `Buscando tienda ${done}/${total}...`;
+      }
+    };
+
+    let firstCall = true;
+    await Promise.all(storeIdsToSearch.map(storeId => new Promise(resolve => {
+      const storeInfo       = availableStores.find(s => s.id === storeId);
+      const domain          = storeInfo?.domain;
+      const singleStoreUrls = domain && storeUrls[domain] ? { [domain]: storeUrls[domain] } : {};
+      const skipUsage       = !firstCall;
+      firstCall             = false;
+
+      dataBunkerAPI.streamPriceCheck(input, {
+        scrapedData,
+        selectedStores: [storeId],
+        productImage,
+        storeUrls: singleStoreUrls,
+        wholeWeb: false,
+        skipUsage,
+        noCache: true,
+      }, {
+        onStatus:   () => {},
+        onComplete: result => {
+          done++;
+          if (!productInfo && result.product?.name) productInfo = result.product;
+          (result.stores || []).forEach(s => allStores.push(s));
+          if (allStores.length > 0 || productInfo) updateCard();
+          updateProgress();
+          this.scrollToBottom();
+          resolve();
+        },
+        onError: () => {
+          done++;
+          updateProgress();
+          this.scrollToBottom();
+          resolve();
+        },
+      });
+    })));
+
+    // Save full accumulated result to cache
+    if (allStores.length > 0) {
+      const priced = allStores.filter(s => s.price != null && !s.estimated);
+      const lowest = priced.length > 0
+        ? priced.reduce((min, s) => s.price < min.price ? s : min)
+        : null;
+      const fullResult = {
+        product: productInfo || { name: input },
+        stores:  allStores,
+        lowest,
+        count:   allStores.length,
+      };
+      await dataBunkerAPI.setCachedResults(_cacheQuery, _cacheUpc, fullResult);
+    }
+
+    this._updateUsageCounter();
+    this.clearContextData();
     this.isProcessing = false;
   }
 
@@ -555,13 +1198,23 @@ class DataBunkerPriceChecker {
 
   displayPriceResult(result, query = '') {
     const messagesContainer = document.getElementById('messages');
+    const product = result.product || {};
+    const stores = result.stores || [];
+    const productImage = stores.find(s => s.image)?.image || null;
+    const card = this._buildResultCard(product, stores, query, productImage, this.currentStoreUrls);
+    messagesContainer.appendChild(card);
+    this.scrollToBottom();
+  }
+
+  _buildResultCard(product, stores, query, productImage, storeUrls) {
     const resultEl = document.createElement('div');
     resultEl.className = 'price-result';
 
-    const product = result.product || {};
-    const stores = result.stores || [];
-    const lowest = result.lowest;
-    const count = result.count || stores.length;
+    // Calculate lowest from stores
+    const realWithPrice = stores.filter(s => !s.estimated && s.price != null);
+    const lowest = realWithPrice.length > 0
+      ? realWithPrice.reduce((min, s) => s.price < min.price ? s : min, realWithPrice[0])
+      : null;
 
     // Color gradient helpers (cheapest=green → mid=yellow → expensive=red)
     const interpolateHex = (c1, c2, t) => {
@@ -576,9 +1229,6 @@ class DataBunkerPriceChecker {
         ? interpolateHex('#99e3dd', '#fae99f', ratio * 2)
         : interpolateHex('#fae99f', '#fec0bf', (ratio - 0.5) * 2);
     };
-
-    // Product image (once, from dictionary — same for all stores)
-    const productImage = stores.find(s => s.image)?.image || null;
 
     // Separar precios reales de estimados y ordenar de menor a mayor precio
     const rawRealPrices = stores.filter(s => !s.estimated);
@@ -739,7 +1389,7 @@ class DataBunkerPriceChecker {
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
       refreshBtn.textContent = '⏳ Actualizando...';
-      await this.refreshSearch(query, productImage, this.currentStoreUrls);
+      await this.refreshSearch(query, productImage, storeUrls || this.currentStoreUrls);
     });
     actionsRow.appendChild(refreshBtn);
 
@@ -762,9 +1412,7 @@ class DataBunkerPriceChecker {
     }
 
     resultEl.appendChild(actionsRow);
-
-    messagesContainer.appendChild(resultEl);
-    this.scrollToBottom();
+    return resultEl;
   }
 
   _generateExcel(product, stores) {
@@ -885,9 +1533,10 @@ class DataBunkerPriceChecker {
   }
 
   async showStoreSelectorInChat() {
-    const availableStores = dataBunkerAPI.getAvailableStores();
+    const availableStores = await dataBunkerAPI.getAvailableStores();
     const savedStoreIds = await dataBunkerAPI.getSelectedStores();
-    this.selectedStores = [...savedStoreIds];
+    const availableIds = new Set(availableStores.map(s => s.id));
+    this.selectedStores = savedStoreIds.filter(id => availableIds.has(id));
 
     const messagesContainer = document.getElementById('messages');
 
@@ -955,8 +1604,16 @@ class DataBunkerPriceChecker {
       selectorEl.querySelectorAll('button').forEach(b => b.disabled = true);
       selectorEl.style.opacity = '0.7';
       this.pendingWholeWeb = true;
-      this.addMessage('bot', '🌐 Buscando en toda la web...');
-      await this.processPriceCheck(this.pendingSearchQuery);
+
+      if (this.multiSearchPending) {
+        const items = this.multiSearchPending.map(item => ({ ...item, wholeWeb: true }));
+        this.multiSearchPending = null;
+        this.addMessage('bot', `🌐 Buscando ${items.length} producto${items.length !== 1 ? 's' : ''} en toda la web...`);
+        await this.runMultiSearchBatch(items);
+      } else {
+        this.addMessage('bot', '🌐 Buscando en toda la web...');
+        await this.processPriceCheck(this.pendingSearchQuery);
+      }
     });
   }
 
@@ -968,14 +1625,21 @@ class DataBunkerPriceChecker {
 
     await dataBunkerAPI.saveSelectedStores(this.selectedStores);
 
-    const availableStores = dataBunkerAPI.getAvailableStores();
+    const availableStores = await dataBunkerAPI.getAvailableStores();
     const selectedNames = this.selectedStores
       .map(id => availableStores.find(s => s.id === id)?.name)
       .filter(Boolean)
       .join(', ');
 
     this.addMessage('bot', `🏪 Buscando en: ${selectedNames}`);
-    await this.processPriceCheck(this.pendingSearchQuery);
+
+    if (this.multiSearchPending) {
+      const items = this.multiSearchPending;
+      this.multiSearchPending = null;
+      await this.runMultiSearchBatch(items);
+    } else {
+      await this.processPriceCheckProgressive(this.pendingSearchQuery);
+    }
   }
 
   scrollToBottom() {

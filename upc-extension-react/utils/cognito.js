@@ -8,7 +8,8 @@ const COGNITO_CONFIG = {
   region: 'us-east-1',
   userPoolId: 'us-east-1_rQThsc99E',
   clientId: '5fnkj569pk2qnf4cbga2plj14p',
-  requiredGroup: 'addon', // solo usuarios de este grupo pueden entrar
+  // user must belong to AT LEAST ONE of these groups
+  requiredGroups: ['addon', 'addon_beauty', 'addon_especializadas'],
 };
 
 const COGNITO_ENDPOINT = `https://cognito-idp.${COGNITO_CONFIG.region}.amazonaws.com/`;
@@ -67,7 +68,7 @@ const cognitoService = {
     // Verificar que el usuario pertenezca al grupo requerido
     const payload = _decodeJwtPayload(auth.IdToken);
     const groups = payload?.['cognito:groups'] || [];
-    if (!groups.includes(COGNITO_CONFIG.requiredGroup)) {
+    if (!COGNITO_CONFIG.requiredGroups.some(g => groups.includes(g))) {
       throw new Error('No tienes acceso a esta aplicación. Contacta al administrador.');
     }
 
@@ -110,7 +111,7 @@ const cognitoService = {
       // Re-verificar grupo en cada refresh
       const payload = _decodeJwtPayload(auth.IdToken);
       const groups = payload?.['cognito:groups'] || [];
-      if (!groups.includes(COGNITO_CONFIG.requiredGroup)) {
+      if (!COGNITO_CONFIG.requiredGroups.some(g => groups.includes(g))) {
         await this.signOut();
         return false;
       }
@@ -144,5 +145,15 @@ const cognitoService = {
       name: payload.name || payload.given_name || '',
       sub: payload.sub || '',
     };
+  },
+
+  /**
+   * Returns the Cognito groups the current user belongs to.
+   * api.js maps these groups to stores + dictionaries.
+   */
+  async getUserGroups() {
+    const session = await this.getSession();
+    const payload = session ? _decodeJwtPayload(session.idToken) : null;
+    return payload?.['cognito:groups'] || [];
   },
 };

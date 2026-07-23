@@ -32,8 +32,17 @@ class Config:
     COGNITO_REGION      = os.environ.get('COGNITO_REGION', 'us-east-1')
     COGNITO_USER_POOL_ID = os.environ.get('COGNITO_USER_POOL_ID', 'us-east-1_rQThsc99E')
     COGNITO_CLIENT_ID   = os.environ.get('COGNITO_CLIENT_ID', '5fnkj569pk2qnf4cbga2plj14p')
-    COGNITO_REQUIRED_GROUP = os.environ.get('COGNITO_REQUIRED_GROUP', 'addon')
+    # Comma-separated — user must belong to AT LEAST ONE of these groups
+    COGNITO_REQUIRED_GROUPS = [
+        g.strip()
+        for g in os.environ.get('COGNITO_REQUIRED_GROUPS', 'addon,addon_beauty,addon_especializadas').split(',')
+        if g.strip()
+    ]
     COGNITO_AUTH_ENABLED = os.environ.get('COGNITO_AUTH_ENABLED', 'true').lower() == 'true'
+
+    # Supabase
+    SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
+    SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
 
     @classmethod
     def validate(cls):

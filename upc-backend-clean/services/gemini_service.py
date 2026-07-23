@@ -13,16 +13,20 @@ logger = setup_logger(__name__)
 # Known Mexican retailer domains (used to filter raw results without Gemini)
 KNOWN_DOMAINS = {
     # Supermarkets / general
-    'walmart.com.mx', 'amazon.com.mx', 'chedraui.com.mx',
+    'walmart.com.mx', 'super.walmart.com.mx', 'amazon.com.mx', 'chedraui.com.mx',
     'soriana.com', 'soriana.com.mx', 'lacomer.com.mx',
     'heb.com.mx', 'costco.com.mx', 'bodegaaurrera.com.mx', 'samsclub.com.mx',
-    'lacomer.com.mx', 'yza.mx',
+    'yza.mx',
     # Pharmacies
     'fahorro.com', 'farmaciasanpablo.com.mx', 'benavides.com.mx',
     'farmaciasguadalajara.com', 'farmaciasguadalajara.com.mx',
+    'prixz.com', 'farmaciaalicia.com.mx',
+    'farmaciasespecializadas.com', 'farmaciacoyoacan.com',
+    # Beauty / specialty
+    'sephora.com.mx', 'dermaexpress.com.mx',
     # Other retailers
-    'liverpool.com.mx', 'mercadolibre.com.mx',
-    'coppel.com', 'elektra.com.mx', 'sanborns.com.mx',
+    'liverpool.com.mx', 'mercadolibre.com.mx', 'sanborns.com.mx',
+    'coppel.com', 'elektra.com.mx',
 }
 
 
@@ -56,25 +60,15 @@ class GeminiService:
 
             self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
-            model_names = [
-                'gemini-2.0-flash',
+            self._model_candidates = [
+                'gemini-2.5-flash',
+                'gemini-2.5-flash-lite',
                 'gemini-2.0-flash-lite',
                 'gemini-1.5-flash',
             ]
-
-            for model_name in model_names:
-                try:
-                    logger.info(f"🤖 Trying Gemini model: {model_name}")
-                    self._model_name = model_name
-                    self.available = True
-                    logger.info(f"✅ Gemini configured with model: {model_name}")
-                    return
-                except Exception as model_error:
-                    logger.warning(f"⚠️ Model {model_name} failed: {model_error}")
-                    continue
-
-            logger.error("❌ No Gemini model worked")
-            self.available = False
+            self._model_name = self._model_candidates[0]
+            self.available = True
+            logger.info(f"✅ Gemini ready, primary model: {self._model_name}")
 
         except ImportError:
             logger.error("❌ google-genai not installed")
@@ -150,10 +144,7 @@ DATOS:
 
             logger.info("🤖 Analyzing with Gemini...")
 
-            response = self.client.models.generate_content(
-                model=self._model_name,
-                contents=prompt,
-            )
+            response = self._generate_with_fallback(prompt)
             result_text = response.text.strip()
 
             if result_text.startswith('```'):
@@ -169,6 +160,28 @@ DATOS:
         except Exception as e:
             logger.error(f"❌ Gemini analysis error: {e}")
             return self._format_raw_results(results)
+
+    def _generate_with_fallback(self, prompt, **kwargs):
+        """Try each model candidate until one works (handles deprecated models)."""
+        candidates = getattr(self, '_model_candidates', [self._model_name])
+        last_error = None
+        for model in candidates:
+            try:
+                response = self.client.models.generate_content(
+                    model=model, contents=prompt, **kwargs
+                )
+                if model != self._model_name:
+                    logger.info(f"🔄 Switched to model: {model}")
+                    self._model_name = model
+                return response
+            except Exception as e:
+                err_str = str(e)
+                if 'NOT_FOUND' in err_str or 'no longer available' in err_str or '404' in err_str:
+                    logger.warning(f"⚠️ Model {model} deprecated, trying next")
+                    last_error = e
+                    continue
+                raise  # re-raise non-deprecation errors immediately
+        raise last_error
 
     def search_missing_prices(self, product_query, missing_stores):
         """
@@ -198,11 +211,7 @@ DATOS:
                     f'o {{"price":null,"url":null,"title":null}} si no lo encuentras o no coincide.'
                 )
 
-                response = self.client.models.generate_content(
-                    model=self._model_name,
-                    contents=prompt,
-                    config=config,
-                )
+                response = self._generate_with_fallback(prompt, config=config)
                 text = response.text.strip()
                 if text.startswith('```'):
                     text = re.sub(r'^```(?:json)?\n|```$', '', text, flags=re.MULTILINE)

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DataBunker Price Checker",
-  "version": "1.4.5",
+  "version": "1.5.3",
   "description": "Busca precios de productos en tiempo real usando IA. Escanea páginas web, obtiene UPCs y compara precios de múltiples fuentes.",
   "permissions": [
     "activeTab",
@@ -44,7 +44,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/*", "diccionario_ext.json"],
+      "resources": ["icons/*", "diccionario_ext.json", "diccionario_beauty.json", "diccionario_farma_esp.json"],
       "matches": ["<all_urls>"]
     }
   ]
