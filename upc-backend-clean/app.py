@@ -4,7 +4,7 @@ Flask application for price checking with Oxylabs and Gemini
 Optimized for Railway healthchecks with lazy loading
 Upc o descricion
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from functools import wraps, lru_cache
 import re
@@ -35,7 +35,7 @@ def _validate_cognito_token(token):
                     f'/{Config.COGNITO_USER_POOL_ID}'),
         )
         groups = payload.get('cognito:groups') or []
-        if Config.COGNITO_REQUIRED_GROUP not in groups:
+        if not any(g in groups for g in Config.COGNITO_REQUIRED_GROUPS):
             return None, 'Usuario no pertenece al grupo requerido'
         return payload, None
     except jwt.ExpiredSignatureError:
@@ -61,6 +61,7 @@ def require_cognito_token(f):
             logger_ref = setup_logger(__name__)
             logger_ref.warning(f'⚠️ Token inválido: {error}')
             return jsonify({'error': f'No autorizado: {error}'}), 401
+        g.cognito_payload = payload
         return f(*args, **kwargs)
     return decorated
 
@@ -73,6 +74,7 @@ logger = setup_logger(__name__)
 _gemini_service = None
 _oxylabs_service = None
 _zyte_service = None
+_supabase_service = None
 
 
 def get_gemini_service():
@@ -97,6 +99,14 @@ def get_zyte_service():
         from services.zyte_service import ZyteService
         _zyte_service = ZyteService()
     return _zyte_service
+
+
+def get_supabase_service():
+    global _supabase_service
+    if _supabase_service is None:
+        from services.supabase_service import SupabaseService
+        _supabase_service = SupabaseService()
+    return _supabase_service
 
 
 # ===================== Startup Validation =====================
@@ -168,6 +178,18 @@ def validate_key():
     return jsonify({'valid': bool(key and key in Config.API_KEYS)})
 
 
+@app.route('/api/usage', methods=['GET'])
+@require_cognito_token
+def get_usage():
+    """Return current month usage for the authenticated user."""
+    payload = getattr(g, 'cognito_payload', None)
+    if not payload:
+        return jsonify({'count': 0, 'limit': 0, 'remaining': 9999})
+    sub = payload.get('sub', '')
+    usage = get_supabase_service().get_usage(sub)
+    return jsonify(usage), 200
+
+
 @app.route('/check_price', methods=['POST', 'OPTIONS'])
 @app.route('/api/check_price', methods=['POST', 'OPTIONS'])
 @require_cognito_token
@@ -189,9 +211,32 @@ def check_price():
         upc        = _clean_upc(data.get('upc', ''))
         domains    = data.get('domains', None)
         store_urls = data.get('store_urls', {})
+        skip_usage = data.get('skip_usage', False)
 
         if not query and not upc:
             return jsonify({'error': 'query or upc required'}), 400
+
+        # ── Usage check ───────────────────────────────────────────────────────
+        payload = getattr(g, 'cognito_payload', None)
+        usage_data = {'count': 0, 'limit': 0, 'remaining': 9999}
+        if payload:
+            sub    = payload.get('sub', '')
+            email  = payload.get('email') or payload.get('cognito:username', '')
+            groups = payload.get('cognito:groups', [])
+            group  = groups[0] if groups else None
+            supa   = get_supabase_service()
+            supa.upsert_user(sub, email, group)
+            if not skip_usage:
+                usage_data = supa.check_and_increment(sub)
+                if not usage_data['allowed']:
+                    limit = usage_data['limit']
+                    return jsonify({
+                        'error': f'Límite mensual alcanzado ({limit} consultas/mes). Contacta al administrador.',
+                        'usage': usage_data,
+                    }), 429
+                supa.log_search(sub, query=query or None, upc=upc or None)
+            else:
+                usage_data = supa.get_usage(sub)
 
         display      = query if query else f"UPC {upc}"
         search_query = f"{query} {upc}".strip() if (query and upc) else (query or upc)
@@ -253,6 +298,7 @@ def check_price():
                 analyzed['price_range'] = {'min': min(prices), 'max': max(prices)}
 
         analyzed['powered_by'] = f"{powered_by} + gemini" if gemini.available else powered_by
+        analyzed['usage'] = usage_data
 
         logger.info(f"✅ Returned {len(offers)} offers ({analyzed['powered_by']})")
         for o in offers:
