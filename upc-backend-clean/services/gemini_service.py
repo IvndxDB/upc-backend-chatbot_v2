@@ -22,6 +22,8 @@ KNOWN_DOMAINS = {
     'farmaciasguadalajara.com', 'farmaciasguadalajara.com.mx',
     'prixz.com', 'farmaciaalicia.com.mx',
     'farmaciasespecializadas.com', 'farmaciacoyoacan.com',
+    'curitek.com', 'probemedic.mx', 'wecarepharma.mx', 'farmaleal.com.mx', 'farmasmart.com',
+    'vidafarmacias.com',
     # Beauty / specialty
     'sephora.com.mx', 'dermaexpress.com.mx',
     # Other retailers
@@ -92,18 +94,22 @@ class GeminiService:
 
             if all_zyte:
                 validation_rules = """═══ REGLAS DE VALIDACIÓN ═══
-1. PRODUCTO CORRECTO: Los URLs vienen de un diccionario curado, confía en que son el producto.
-   Descarta SOLO si el nombre extraído es completamente diferente al buscado (otro producto distinto).
-2. TIPO DE SITIO: Descarta páginas de búsqueda/catálogo, PDFs, sellercentral. Solo páginas de producto.
-3. MEDICAMENTOS CON DOSIS: Si el producto tiene mg/ml específicos (ej. Mounjaro 2.5mg), la dosis debe coincidir. Descarta variantes de dosis diferente o marcas genéricas no autorizadas.
+1. PRODUCTO CORRECTO: Los URLs vienen de un diccionario curado y verificado — el URL ya garantiza que es el producto correcto.
+   Acepta si la marca o nombre base coincide con el buscado, aunque falten detalles (mg, presentación, tamaño).
+   Descarta SOLO si el nombre extraído es de una marca o producto completamente distinto (ej. buscas "Inovocare" y extrajo "Omeprazol").
+2. DOSIS/PRESENTACIÓN: NO descartes por falta de mg o presentación en el título — el URL curado garantiza la variante correcta. Acepta cualquier resultado donde la marca/nombre base coincida.
+3. TIPO DE SITIO: Descarta solo si claramente es página de búsqueda/catálogo, PDF o sellercentral. No descartes por desconocer la tienda.
 4. PRECIO: Si "price" existe úsalo. Si es null y source es "zyte" → incluye con price: null (agotado). Copia "regular_price" si es distinto de "price"."""
             elif all_organic:
                 validation_rules = """═══ REGLAS DE VALIDACIÓN (BÚSQUEDA WEB POR UPC) ═══
 1. PRODUCTO CORRECTO: Se buscó por UPC en Google, los resultados son páginas de tiendas mexicanas.
    Descarta SOLO si el título indica claramente un producto distinto.
 2. TIPO DE SITIO: Acepta solo páginas de producto de tiendas mexicanas. Descarta blogs, noticias, PDFs, sellercentral.
-3. PRECIO: Los resultados de google_search no traen precio — pon price: null. El usuario verá el link directo.
-4. TIENDAS: Extrae el nombre de la tienda del dominio (ej. walmart.com.mx → "Walmart")."""
+3. PRECIO: Extrae el precio del campo "description" (snippet de Google) si contiene patrones como "MX$1,766.00",
+   "MXN $1,766.00", "Precio normal MXN $X", "$X MXN", etc. Convierte a número (sin símbolo ni comas).
+   Si el snippet menciona dos precios (precio tachado y precio actual), usa el menor como "price" y el mayor como "regular_price".
+   Si no hay precio en el snippet → price: null.
+4. TIENDAS: Extrae el nombre de la tienda del dominio (ej. walmart.com.mx → "Walmart", fahorro.com → "Farmacias del Ahorro")."""
             else:
                 validation_rules = """═══ REGLAS DE VALIDACIÓN (ESTRICTAS) ═══
 1. MARCA Y SUSTANCIA: Descarta marcas genéricas desconocidas, "fórmulas avanzadas" o "kits de apoyo" cuando el buscado es de patente. Solo acepta la marca original o genéricos con nombre de sustancia claro.
@@ -242,8 +248,16 @@ DATOS:
     @staticmethod
     def _slim_for_prompt(results):
         """Keep only fields Gemini needs — strips long snippet/desc fields that inflate the prompt."""
-        keep = {'url', 'title', 'price', 'regular_price', '_source', '_seller', '_domain', 'currency', 'thumb'}
-        return [{k: v for k, v in r.items() if k in keep and v not in (None, '', [])} for r in results]
+        keep = {'url', 'title', 'price', 'regular_price', '_source', '_seller', '_domain', 'currency', 'thumb', 'desc', 'description'}
+        slimmed = []
+        for r in results:
+            item = {k: v for k, v in r.items() if k in keep and v not in (None, '', [])}
+            # Trim snippet to 200 chars
+            for snippet_key in ('desc', 'description'):
+                if snippet_key in item and isinstance(item[snippet_key], str):
+                    item[snippet_key] = item[snippet_key][:200]
+            slimmed.append(item)
+        return slimmed
 
     def _format_raw_results(self, results):
         """Fallback formatter when Gemini is unavailable or rate-limited."""

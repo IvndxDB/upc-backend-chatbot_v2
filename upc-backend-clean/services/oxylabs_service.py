@@ -32,6 +32,7 @@ DOMAIN_TO_STORE_NAME = {
     'coppel.com':                   'coppel',
     'elektra.com.mx':               'elektra',
     'sanborns.com.mx':              'sanborns',
+    'vidafarmacias.com':            'vida farmacias',
 }
 
 
@@ -190,7 +191,8 @@ class OxylabsService:
         return []
 
     def _single_search(self, query, domain):
-        """Execute one Oxylabs request, return top results for domain"""
+        """Execute one Oxylabs organic search, return top results for domain.
+        Prices are extracted by Gemini from the snippet/description field."""
         logger.info(f"🔍 Searching: {query!r}")
 
         payload = {
@@ -343,7 +345,51 @@ class OxylabsService:
         for r in organic:
             if '_source' not in r:
                 r['_source'] = 'oxylabs_organic'
+            # Try to extract price from the snippet (Oxylabs field: 'desc')
+            if not r.get('price'):
+                snippet = r.get('desc') or r.get('description') or ''
+                extracted = self._price_from_snippet(snippet)
+                if extracted:
+                    r['price'] = extracted['price']
+                    if extracted.get('regular_price'):
+                        r['regular_price'] = extracted['regular_price']
         return organic
+
+    @staticmethod
+    def _price_from_snippet(text):
+        """Extract price (and optional regular_price) from a Google organic snippet.
+        Handles: MX$869.02, MXN $1,019.37, $815.29, 'antes $X $Y' discount patterns."""
+        if not text:
+            return None
+
+        price_pat = r'(?:MX\$|MXN\s*\$|\$)\s*([\d,]+(?:\.\d{1,2})?)'
+        matches = re.findall(price_pat, text, re.IGNORECASE)
+        if not matches:
+            return None
+
+        prices = []
+        for m in matches:
+            try:
+                prices.append(float(m.replace(',', '')))
+            except ValueError:
+                pass
+        if not prices:
+            return None
+
+        # 'antes $X $Y' → X is original price, Y (or min) is discounted
+        antes = re.search(
+            r'antes\s+(?:MX\$|MXN\s*\$|\$)\s*([\d,]+(?:\.\d{1,2})?)',
+            text, re.IGNORECASE
+        )
+        if antes and len(prices) >= 2:
+            try:
+                regular = float(antes.group(1).replace(',', ''))
+                current = min(p for p in prices if p != regular)
+                return {'price': str(current), 'regular_price': str(regular)}
+            except Exception:
+                pass
+
+        return {'price': str(prices[0])}
 
     def _extract_shopping(self, data):
         """Extract items from a google_shopping_search parsed response."""

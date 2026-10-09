@@ -3,16 +3,30 @@ Zyte Service — direct product page extraction.
 Always uses browserHtml + geolocation MX for maximum extraction quality.
 Retries up to MAX_RETRIES times on timeout or server errors.
 """
+import re
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse, parse_qs
 from logger_config import setup_logger
 from config import Config
 
 logger = setup_logger(__name__)
 
 MAX_RETRIES = 5
+
+
+def _fix_mexican_price(price_str):
+    """
+    Fix Mexican thousand-separator format: '1.215' → '1215', '1.215,50' → '1215.50'
+    Leaves normal decimals untouched: '14.50' → '14.50'
+    """
+    if not price_str:
+        return price_str
+    s = str(price_str).strip()
+    # Pattern: digits, period, exactly 3 digits, optionally comma+cents → thousands sep
+    if re.match(r'^\d{1,4}\.\d{3}(,\d{1,2})?$', s):
+        s = s.replace('.', '').replace(',', '.')
+    return s
 RETRY_DELAY = 2  # seconds between retries
 
 
@@ -122,8 +136,8 @@ class ZyteService:
         name = product.get('name', '')
         currency = product.get('currency', 'MXN') or 'MXN'
 
-        price_str = product.get('price') or ''
-        regular_price_str = product.get('regularPrice') or ''
+        price_str = _fix_mexican_price(product.get('price') or '')
+        regular_price_str = _fix_mexican_price(product.get('regularPrice') or '')
 
         # If both prices exist and differ → discounted price vs original
         if price_str and regular_price_str and price_str != regular_price_str:
@@ -160,23 +174,15 @@ class ZyteService:
 
     def _extract_sanpablo(self, domain, url):
         """
-        San Pablo special: uses networkCapture to intercept the Facebook pixel
-        request (facebook.com/tr) which carries the real product price in
-        cd[value] query param. Regular Zyte product extraction returns no price.
+        San Pablo: standard Zyte AI product extraction.
+        Prices come from product.price / product.regularPrice (AI extraction).
         """
         payload = {
             "url": url,
             "browserHtml": True,
             "product": True,
-            "productOptions": {"extractFrom": "browserHtml"},
+            "productOptions": {"extractFrom": "browserHtml", "ai": True},
             "geolocation": "MX",
-            "networkCapture": [
-                {
-                    "filterType": "url",
-                    "value": "facebook.com/tr",
-                    "matchType": "contains",
-                }
-            ],
         }
 
         response = None
@@ -211,39 +217,23 @@ class ZyteService:
             return None
 
         data = response.json()
-        top_keys = [k for k in data.keys()]
-        logger.info(f"🔍 SanPablo raw keys: {top_keys}")
-
-        # ── Extract price from Facebook pixel network capture ──────────────
-        price = None
-        currency = 'MXN'
-        captures = data.get('networkCapture', [])
-        logger.info(f"🔍 SanPablo captures count: {len(captures)}")
-
-        for capture in captures:
-            call_url = capture.get('url', '')
-            logger.info(f"🔍 SanPablo captured URL: {call_url[:120]}")
-            if not call_url:
-                continue
-            query = parse_qs(urlparse(call_url).query)
-            raw_value = query.get('cd[value]', [None])[0]
-            if raw_value:
-                try:
-                    price = str(float(raw_value))
-                    currency = query.get('cd[currency]', ['MXN'])[0] or 'MXN'
-                    logger.info(f"✅ SanPablo pixel price: {price} {currency}")
-                except (ValueError, TypeError):
-                    pass
-                break
-
-        if not captures:
-            logger.warning("⚠️ SanPablo: no Facebook pixel captured")
-
-        # ── Product name and image from AI extraction (best-effort) ───────
         product = data.get('product') or {}
-        logger.info(f"🔍 SanPablo product keys: {list(product.keys()) if product else 'empty'}")
-        logger.info(f"🔍 SanPablo product name: {product.get('name')!r}, price: {product.get('price')!r}")
-        name = product.get('name', '')
+
+        if not product:
+            logger.warning("⚠️ Zyte SanPablo: empty product object in response")
+            return None
+
+        def _clean(value):
+            if value is None:
+                return None
+            value = str(value).strip()
+            return value or None
+
+        price = _fix_mexican_price(_clean(product.get('price')))
+        regular_price = _fix_mexican_price(_clean(product.get('regularPrice')))
+        currency = product.get('currency') or 'MXN'
+        name = product.get('name') or ''
+
         image = None
         main_image = product.get('mainImage')
         if isinstance(main_image, dict):
@@ -251,17 +241,19 @@ class ZyteService:
         elif isinstance(main_image, str):
             image = main_image
 
-        canonical_url = product.get('url') or url
+        canonical_url = product.get('canonicalUrl') or product.get('url') or url
+
+        logger.info(f"✅ SanPablo: {name!r} price={price} regular={regular_price} {currency}")
 
         if not price and not name:
-            logger.info("⚠️ Zyte SanPablo: no price from pixel and no product name")
+            logger.warning("⚠️ Zyte SanPablo: no price and no name — check raw response")
             return None
 
         return {
             'url': canonical_url,
             'title': name,
             'price': price,
-            'regular_price': None,
+            'regular_price': regular_price,
             'currency': currency,
             'thumb': image,
             '_domain': domain,

@@ -9,7 +9,7 @@ const COGNITO_CONFIG = {
   userPoolId: 'us-east-1_rQThsc99E',
   clientId: '5fnkj569pk2qnf4cbga2plj14p',
   // user must belong to AT LEAST ONE of these groups
-  requiredGroups: ['addon', 'addon_beauty', 'addon_especializadas'],
+  requiredGroups: ['addon'],
 };
 
 const COGNITO_ENDPOINT = `https://cognito-idp.${COGNITO_CONFIG.region}.amazonaws.com/`;
