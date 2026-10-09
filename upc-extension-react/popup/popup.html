@@ -17,6 +17,12 @@
       <div id="userBadge" class="user-badge hidden">
         <span id="usageCounter" class="usage-counter" title="Consultas este mes"></span>
         <span id="userEmail" class="user-email"></span>
+        <button id="savedListBtn" class="saved-list-header-btn" title="Mi lista guardada">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span id="savedListBadge" class="saved-list-badge hidden">0</span>
+        </button>
         <button id="logoutBtn" class="logout-btn" title="Cerrar sesión">↩</button>
       </div>
     </header>
@@ -76,6 +82,18 @@
         <div id="cognitoError" class="cognito-error hidden"></div>
         <button id="cognitoLoginBtn" class="activation-btn" disabled>Iniciar sesión</button>
       </div>
+    </div>
+
+    <!-- Saved Product List Panel -->
+    <div id="savedListPanel" class="saved-list-panel hidden">
+      <div class="saved-list-panel-header">
+        <span class="saved-list-panel-title">📋 Lista guardada</span>
+        <button id="closeSavedListPanelBtn" class="icon-btn">✕</button>
+      </div>
+      <div id="savedListItems" class="saved-list-items">
+        <!-- Items injected by JS -->
+      </div>
+      <div class="saved-list-panel-footer" id="savedListFooter"></div>
     </div>
 
     <!-- Loading Overlay -->

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DataBunker Price Checker - API Client
  * Handles all communication with the backend
  */
@@ -167,104 +167,92 @@ const AVAILABLE_STORES = [
     url: 'https://farmaciacoyoacan.com/',
     logo: '💊',
     color: '#4CAF50'
+  },
+  {
+    id: 'curitek',
+    name: 'Curitek',
+    domain: 'curitek.com',
+    url: 'https://curitek.com/',
+    logo: '💊',
+    color: '#1A6B8A'
+  },
+  {
+    id: 'probemedic',
+    name: 'Probemedic',
+    domain: 'probemedic.mx',
+    url: 'https://www.probemedic.mx/',
+    logo: '💊',
+    color: '#2E7D32'
+  },
+  {
+    id: 'wecare',
+    name: 'WeCare',
+    domain: 'wecarepharma.mx',
+    url: 'https://wecarepharma.mx/',
+    logo: '💊',
+    color: '#00897B'
+  },
+  {
+    id: 'farmaleal',
+    name: 'Farma Leal',
+    domain: 'farmaleal.com.mx',
+    url: 'https://www.farmaleal.com.mx/',
+    logo: '💊',
+    color: '#5C6BC0'
+  },
+  {
+    id: 'farmasmart',
+    name: 'FarmaSmart',
+    domain: 'farmasmart.com',
+    url: 'https://farmasmart.com/',
+    logo: '💊',
+    color: '#43A047'
+  },
+  {
+    id: 'vidafarmacias',
+    name: 'Vida Farmacias',
+    domain: 'vidafarmacias.com',
+    url: 'https://vidafarmacias.com/',
+    logo: '💊',
+    color: '#00ACC1'
   }
 ];
 
-// ─── Group → stores + dictionary mapping ───────────────────────────────────
-// Add a key here for each new Cognito group.
-// stores: array of AVAILABLE_STORES ids (null or absent = all stores)
-// dictionaries: array of dictionary file names (without 'diccionario_' prefix)
-const GROUP_PROFILES = {
-  addon: {
-    stores: [
-      'amazon', 'walmart', 'soriana', 'chedraui', 'fahorro',
-      'farmaciasanpablo', 'benavides', 'farmaciasguadalajara', 'lacomer', 'yza',
-    ],
-    dictionaries: ['ext'],
-  },
-  addon_beauty: {
-    stores: [
-      'amazon', 'walmart', 'fahorro', 'farmaciasanpablo', 'mercadolibre',
-      'yza', 'liverpool', 'sanborns', 'sephora', 'dermaexpress',
-    ],
-    dictionaries: ['beauty'],
-  },
-  addon_especializadas: {
-    stores: [
-      'farmaciasanpablo', 'yza', 'fahorro', 'fesa', 'farmaciacoyoacan',
-      'farmaciasguadalajara', 'benavides', 'prixz', 'amazon', 'walmart',
-    ],
-    dictionaries: ['farma_esp'],
-  },
-};
+// Store index map (fixed — position in AVAILABLE_STORES = index stored in Supabase)
+// 0:amazon  1:walmart  2:soriana  3:chedraui  4:fahorro  5:farmaciasanpablo
+// 6:benavides  7:farmaciasguadalajara  8:lacomer  9:yza  10:heb  11:liverpool
+// 12:sanborns  13:sephora  14:dermaexpress  15:prixz  16:farmaciaalicia
+// 17:mercadolibre  18:fesa  19:farmaciacoyoacan  20:curitek  21:probemedic
+// 22:wecare  23:farmaleal  24:farmasmart  25:vidafarmacias
 
-// Resolved profile cache (reset on sign-out via page reload)
-let _userProfileCache = null;
+// --- Dictionary (single unified file) ---
 
-async function _resolveUserProfile() {
-  if (_userProfileCache) return _userProfileCache;
-
-  const groups = await cognitoService.getUserGroups();
-  const profileGroups = groups.filter(g => GROUP_PROFILES[g]);
-
-  if (profileGroups.length === 0) {
-    // Unknown group → safe default: all stores + ext
-    _userProfileCache = { allowedStores: null, dictionaries: ['ext'] };
-  } else if (profileGroups.length > 1) {
-    // Multiple groups (addon + addon_beauty) → all stores + all dictionaries
-    const dicts = [...new Set(profileGroups.flatMap(g => GROUP_PROFILES[g].dictionaries || ['ext']))];
-    _userProfileCache = { allowedStores: null, dictionaries: dicts };
-  } else {
-    // Single group → use its stores + dictionaries
-    const g = profileGroups[0];
-    _userProfileCache = {
-      allowedStores: GROUP_PROFILES[g].stores || null,
-      dictionaries: GROUP_PROFILES[g].dictionaries || ['ext'],
-    };
-  }
-
-  console.log('👤 User profile:', _userProfileCache);
-  return _userProfileCache;
-}
-// ───────────────────────────────────────────────────────────────────────────
-
-// --- Fuzzy Search (local dictionary) ---
-
-// Cache per dictionary name: { ext: [...], beauty: [...] }
-const _dictCache = {};
+let _dictCache = null;
 
 function _normStr(str) {
   return str.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\w\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-async function _loadOneDictionary(name) {
-  if (_dictCache[name]) return _dictCache[name];
+async function _getUserDictionaries() {
+  if (_dictCache) return _dictCache;
   try {
-    const url = chrome.runtime.getURL(`diccionario_${name}.json`);
+    const url = chrome.runtime.getURL('diccionario_unificado.json');
     const res = await fetch(url);
-    if (!res.ok) { console.error('Dictionary fetch failed:', res.status, url); return []; }
+    if (!res.ok) { console.error('Dictionary fetch failed:', res.status, url); _dictCache = []; return []; }
     const buffer = await res.arrayBuffer();
     const text = new TextDecoder('utf-8').decode(buffer);
-    _dictCache[name] = JSON.parse(text);
-    console.log(`📖 Dictionary "${name}" loaded:`, _dictCache[name].length, 'items');
-    return _dictCache[name];
+    _dictCache = JSON.parse(text);
+    console.log('Dictionary "unificado" loaded:', _dictCache.length, 'items');
   } catch (e) {
-    console.error(`Failed to load dictionary "${name}":`, e);
-    return [];
+    console.error('Failed to load dictionary:', e);
+    _dictCache = [];
   }
+  return _dictCache;
 }
-
-async function _getUserDictionaries() {
-  const profile = await _resolveUserProfile();
-  const names = (profile.dictionaries && profile.dictionaries.length) ? profile.dictionaries : ['ext'];
-  const arrays = await Promise.all(names.map(_loadOneDictionary));
-  return arrays.flat();
-}
-
 async function dictionaryLookupByUPC(upc) {
   const items = await _getUserDictionaries();
   const matches = items.filter(item => item.UPC === upc);
@@ -340,6 +328,7 @@ function buildStoreUrlsFromEntry(entry) {
 class DataBunkerAPI {
   constructor() {
     this.backendUrl = DEFAULT_BACKEND_URL;
+    this._allowedStoresCache = undefined; // undefined=not fetched, []=no access, [...]=stores
     this.loadSettings();
   }
 
@@ -388,13 +377,23 @@ class DataBunkerAPI {
 
   /**
    * Get stores available to the current user.
-   * Derived from Cognito group membership via GROUP_PROFILES.
-   * Returns all stores if the user has no profile group (addon default).
+   * Reads allowed_stores (int[]) from the /api/usage response and maps
+   * each index to the corresponding entry in AVAILABLE_STORES.
+   * Returns [] when no stores are assigned in Supabase.
    */
   async getAvailableStores() {
-    const profile = await _resolveUserProfile();
-    if (!profile.allowedStores) return AVAILABLE_STORES;
-    return AVAILABLE_STORES.filter(s => profile.allowedStores.includes(s.id));
+    if (this._allowedStoresCache !== undefined) return this._allowedStoresCache;
+    const usage = await this.getUsage();
+    const indices = usage?.allowed_stores;
+    if (!indices || !Array.isArray(indices) || indices.length === 0) {
+      this._allowedStoresCache = [];
+    } else {
+      this._allowedStoresCache = indices
+        .filter(i => Number.isInteger(i) && i >= 0 && i < AVAILABLE_STORES.length)
+        .map(i => AVAILABLE_STORES[i]);
+    }
+    console.log('👤 Allowed stores:', this._allowedStoresCache.map(s => s.id));
+    return this._allowedStoresCache;
   }
 
   /**
@@ -431,7 +430,19 @@ class DataBunkerAPI {
         headers: await this._authHeaders(),
       });
       if (!res.ok) return null;
-      return await res.json(); // {count, limit, remaining}
+      const data = await res.json(); // {count, limit, remaining, allowed_stores}
+      // Populate store cache on first successful fetch
+      if (this._allowedStoresCache === undefined && data?.allowed_stores !== undefined) {
+        const indices = data.allowed_stores;
+        if (!indices || !Array.isArray(indices) || indices.length === 0) {
+          this._allowedStoresCache = [];
+        } else {
+          this._allowedStoresCache = indices
+            .filter(i => Number.isInteger(i) && i >= 0 && i < AVAILABLE_STORES.length)
+            .map(i => AVAILABLE_STORES[i]);
+        }
+      }
+      return data;
     } catch (e) {
       return null;
     }

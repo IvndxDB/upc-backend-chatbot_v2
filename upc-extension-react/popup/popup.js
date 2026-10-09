@@ -19,6 +19,9 @@ class DataBunkerPriceChecker {
     this.multiItems = []; // [{text, query, upc, image, storeUrls}] — after resolution
     this.multiSearchPending = null; // resolved items waiting for store selection
 
+    // Saved product list (persisted across sessions, max 10)
+    this.savedList = [];
+
     this.init();
   }
 
@@ -29,6 +32,7 @@ class DataBunkerPriceChecker {
       return;
     }
 
+    this.savedList = await this._getSavedList();
     this.bindEvents();
     this.showUserInHeader();
     this.checkBackendHealth();
@@ -73,6 +77,7 @@ class DataBunkerPriceChecker {
       await cognitoService.signIn(email, password);
       document.getElementById('cognitoLoginScreen').classList.add('hidden');
 
+      this.savedList = await this._getSavedList();
       this.bindEvents();
       this.showUserInHeader();
       this.checkBackendHealth();
@@ -94,6 +99,7 @@ class DataBunkerPriceChecker {
     badge.classList.remove('hidden');
     document.getElementById('logoutBtn').addEventListener('click', () => this.handleLogout());
     this._updateUsageCounter();
+    this._updateSavedListBadge();
   }
 
   async _updateUsageCounter(usageData = null) {
@@ -162,6 +168,29 @@ class DataBunkerPriceChecker {
 
     // Modal
     document.getElementById('closeModalBtn').addEventListener('click', () => this.closeProductModal());
+
+    // Saved list panel — open / close
+    const savedListBtn = document.getElementById('savedListBtn');
+    const savedListPanel = document.getElementById('savedListPanel');
+    savedListBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!savedListPanel.classList.contains('hidden')) {
+        savedListPanel.classList.add('hidden');
+      } else {
+        this.showSavedListPanel();
+      }
+    });
+    document.getElementById('closeSavedListPanelBtn').addEventListener('click', () => {
+      savedListPanel.classList.add('hidden');
+    });
+    // Close when clicking outside the panel
+    document.addEventListener('click', (e) => {
+      if (!savedListPanel.classList.contains('hidden') &&
+          !savedListPanel.contains(e.target) &&
+          e.target !== savedListBtn) {
+        savedListPanel.classList.add('hidden');
+      }
+    });
   }
 
   updateSendButton() {
@@ -394,7 +423,6 @@ class DataBunkerPriceChecker {
   }
 
   showGreeting() {
-    // Add greeting messages with slight delay for natural feel
     setTimeout(() => {
       this.addMessage('bot', '¡Hola! 👋 Soy tu asistente de precios.');
     }, 300);
@@ -404,7 +432,11 @@ class DataBunkerPriceChecker {
     }, 800);
 
     setTimeout(() => {
-      this.addMessage('bot', 'Solo escribe el nombre del producto y te mostraré los mejores precios en tus tiendas favoritas. 🛒');
+      if (this.savedList.length > 0) {
+        this._showSavedListChoice(this.savedList);
+      } else {
+        this.addMessage('bot', 'Solo escribe el nombre del producto y te mostraré los mejores precios en tus tiendas favoritas. 🛒');
+      }
     }, 1300);
   }
 
@@ -1117,6 +1149,275 @@ class DataBunkerPriceChecker {
     }
   }
 
+  // ─── Saved product list ───────────────────────────────────────────────────
+
+  async _getSavedList() {
+    const stored = await chrome.storage.local.get('savedProductList');
+    return Array.isArray(stored.savedProductList) ? stored.savedProductList : [];
+  }
+
+  async _setSavedList(list) {
+    await chrome.storage.local.set({ savedProductList: list });
+    this.savedList = list;
+    this._updateSavedListBadge();
+  }
+
+  async _addToSavedList(product, query, storeUrls) {
+    const list = await this._getSavedList();
+    const text = (product.name || query || '').trim();
+    if (!text) return false;
+    if (list.some(i => i.text.toLowerCase() === text.toLowerCase())) return false;
+    if (list.length >= 10) return false;
+    list.push({
+      text,
+      query: product.name || query || text,
+      upc: product.upc || null,
+      storeUrls: storeUrls || {},
+    });
+    await this._setSavedList(list);
+    return true;
+  }
+
+  async _removeFromSavedList(index) {
+    const list = await this._getSavedList();
+    list.splice(index, 1);
+    await this._setSavedList(list);
+  }
+
+  _updateSavedListBadge() {
+    const badge = document.getElementById('savedListBadge');
+    if (!badge) return;
+    const count = this.savedList.length;
+    if (count > 0) {
+      badge.textContent = count;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+  }
+
+  _showSavedListChoice(savedList) {
+    const messagesContainer = document.getElementById('messages');
+    const msgEl = document.createElement('div');
+    msgEl.className = 'message bot saved-list-prompt';
+
+    const textEl = document.createElement('p');
+    textEl.textContent = `📋 Tienes ${savedList.length} producto${savedList.length !== 1 ? 's' : ''} en tu lista guardada.`;
+    msgEl.appendChild(textEl);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'saved-list-choice-btns';
+
+    const searchListBtn = document.createElement('button');
+    searchListBtn.className = 'choice-btn choice-btn-primary';
+    searchListBtn.textContent = `🔍 Buscar mi lista (${savedList.length})`;
+    searchListBtn.addEventListener('click', () => {
+      msgEl.remove();
+      this.searchSavedList(savedList);
+    });
+
+    const searchIndividualBtn = document.createElement('button');
+    searchIndividualBtn.className = 'choice-btn choice-btn-secondary';
+    searchIndividualBtn.textContent = '✏️ Buscar otro producto';
+    searchIndividualBtn.addEventListener('click', () => {
+      msgEl.remove();
+      document.getElementById('userInput').focus();
+    });
+
+    btnRow.appendChild(searchListBtn);
+    btnRow.appendChild(searchIndividualBtn);
+    msgEl.appendChild(btnRow);
+    messagesContainer.appendChild(msgEl);
+    this.scrollToBottom();
+  }
+
+  async searchSavedList(savedList) {
+    this.addMessage('user', `📋 Buscar lista guardada (${savedList.length} productos)`);
+    this.multiSearchPending = savedList.map(item => ({
+      label: item.text,
+      query: item.query,
+      upc: item.upc || null,
+      image: null,
+      storeUrls: item.storeUrls || {},
+    }));
+    await this.showStoreSelectorInChat();
+  }
+
+  showSavedListPanel() {
+    const panel = document.getElementById('savedListPanel');
+    const itemsEl = document.getElementById('savedListItems');
+    const footerEl = document.getElementById('savedListFooter');
+
+    itemsEl.innerHTML = '';
+    footerEl.innerHTML = '';
+
+    // ── Add-product input ────────────────────────────────────────────────
+    const addSection = document.createElement('div');
+    addSection.className = 'saved-list-add-section';
+
+    const addRow = document.createElement('div');
+    addRow.className = 'saved-list-add-row';
+
+    const addInput = document.createElement('input');
+    addInput.type = 'text';
+    addInput.className = 'saved-list-add-input';
+    addInput.placeholder = 'Nombre o UPC del producto...';
+    addInput.maxLength = 120;
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'saved-list-add-btn';
+    addBtn.textContent = '+';
+    addBtn.disabled = true;
+
+    addRow.appendChild(addInput);
+    addRow.appendChild(addBtn);
+    addSection.appendChild(addRow);
+
+    // Suggestions list (shown when fuzzy matches exist)
+    const suggestEl = document.createElement('div');
+    suggestEl.className = 'saved-list-suggestions hidden';
+    addSection.appendChild(suggestEl);
+
+    itemsEl.appendChild(addSection);
+
+    // Separator
+    const sep = document.createElement('div');
+    sep.className = 'saved-list-separator';
+    itemsEl.appendChild(sep);
+
+    let debounceTimer = null;
+
+    const hideSuggestions = () => {
+      suggestEl.innerHTML = '';
+      suggestEl.classList.add('hidden');
+    };
+
+    const showSuggestions = (matches) => {
+      suggestEl.innerHTML = '';
+      if (matches.length === 0) { suggestEl.classList.add('hidden'); return; }
+      suggestEl.classList.remove('hidden');
+      matches.slice(0, 6).forEach(m => {
+        const opt = document.createElement('div');
+        opt.className = 'saved-list-suggestion-item';
+        opt.innerHTML = `<span class="sug-name">${m.Item}</span>${m.UPC ? `<span class="sug-upc">${m.UPC}</span>` : ''}`;
+        opt.addEventListener('mousedown', async (e) => {
+          e.preventDefault(); // keep input focus
+          hideSuggestions();
+          addInput.value = '';
+          addBtn.disabled = true;
+          const storeUrls = buildStoreUrlsFromEntry(m);
+          const added = await this._addToSavedList(
+            { name: m.Item, upc: m.UPC || null },
+            m.Item,
+            storeUrls,
+          );
+          if (added) this.showSavedListPanel();
+        });
+        suggestEl.appendChild(opt);
+      });
+    };
+
+    const tryAddRaw = async () => {
+      const val = addInput.value.trim();
+      if (!val) return;
+      hideSuggestions();
+      const isBarcode = /^\d{8,14}$/.test(val);
+      if (isBarcode) {
+        const found = await dictionaryLookupByUPC(val);
+        if (found) {
+          await this._addToSavedList(
+            { name: found.Item, upc: found.UPC || null },
+            found.Item,
+            buildStoreUrlsFromEntry(found),
+          );
+        } else {
+          await this._addToSavedList({ name: val, upc: val }, val, {});
+        }
+      } else {
+        await this._addToSavedList({ name: val }, val, {});
+      }
+      addInput.value = '';
+      addBtn.disabled = true;
+      this.showSavedListPanel();
+    };
+
+    addInput.addEventListener('input', () => {
+      const val = addInput.value.trim();
+      addBtn.disabled = !val;
+      clearTimeout(debounceTimer);
+      if (!val) { hideSuggestions(); return; }
+      if (/^\d{8,14}$/.test(val)) { hideSuggestions(); return; } // UPC → no fuzzy
+      debounceTimer = setTimeout(async () => {
+        const matches = await fuzzySearch(val, 6);
+        showSuggestions(matches);
+      }, 220);
+    });
+
+    addInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); tryAddRaw(); }
+      if (e.key === 'Escape') hideSuggestions();
+    });
+
+    addInput.addEventListener('blur', () => {
+      setTimeout(hideSuggestions, 150); // allow mousedown on suggestion first
+    });
+
+    addBtn.addEventListener('click', () => tryAddRaw());
+
+    // ── Saved items ──────────────────────────────────────────────────────
+    if (this.savedList.length === 0) {
+      const emptyEl = document.createElement('p');
+      emptyEl.className = 'saved-list-empty';
+      emptyEl.innerHTML = 'Tu lista está vacía.<br>Agrega productos arriba o con el botón 📌 en los resultados.';
+      itemsEl.appendChild(emptyEl);
+    } else {
+      this.savedList.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'saved-list-item';
+
+        const info = document.createElement('div');
+        info.className = 'saved-list-item-info';
+        info.innerHTML = `<span class="saved-list-item-name">${item.text}</span>${item.upc ? `<span class="saved-list-item-upc">UPC: ${item.upc}</span>` : ''}`;
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'saved-list-item-del';
+        delBtn.title = 'Eliminar';
+        delBtn.textContent = '🗑️';
+        delBtn.addEventListener('click', async () => {
+          await this._removeFromSavedList(index);
+          this.showSavedListPanel();
+        });
+
+        row.appendChild(info);
+        row.appendChild(delBtn);
+        itemsEl.appendChild(row);
+      });
+
+      const searchAllBtn = document.createElement('button');
+      searchAllBtn.className = 'saved-list-search-all-btn';
+      searchAllBtn.textContent = `🔍 Buscar todos (${this.savedList.length})`;
+      searchAllBtn.addEventListener('click', () => {
+        panel.classList.add('hidden');
+        this.searchSavedList([...this.savedList]);
+      });
+      footerEl.appendChild(searchAllBtn);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'saved-list-clear-btn';
+      clearBtn.textContent = '🗑️ Limpiar';
+      clearBtn.addEventListener('click', async () => {
+        await this._setSavedList([]);
+        this.showSavedListPanel();
+      });
+      footerEl.appendChild(clearBtn);
+    }
+
+    panel.classList.remove('hidden');
+    addInput.focus();
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+
   addMessage(type, content, isError = false) {
     const messagesContainer = document.getElementById('messages');
     const messageEl = document.createElement('div');
@@ -1410,6 +1711,36 @@ class DataBunkerPriceChecker {
       });
       actionsRow.appendChild(downloadBtn);
     }
+
+    // Save to list button
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'save-to-list-btn';
+    const alreadySaved = this.savedList.some(
+      i => i.text.toLowerCase() === (product.name || query || '').toLowerCase()
+    );
+    if (alreadySaved) {
+      saveBtn.textContent = '✓ En lista';
+      saveBtn.disabled = true;
+      saveBtn.classList.add('saved');
+    } else {
+      saveBtn.textContent = '📌 Guardar';
+      saveBtn.addEventListener('click', async () => {
+        const added = await this._addToSavedList(product, query, storeUrls);
+        if (added) {
+          saveBtn.textContent = '✓ En lista';
+          saveBtn.disabled = true;
+          saveBtn.classList.add('saved');
+        } else if (this.savedList.length >= 10) {
+          saveBtn.textContent = '⚠️ Lista llena';
+          setTimeout(() => { saveBtn.textContent = '📌 Guardar'; }, 2000);
+        } else {
+          saveBtn.textContent = '✓ En lista';
+          saveBtn.disabled = true;
+          saveBtn.classList.add('saved');
+        }
+      });
+    }
+    actionsRow.appendChild(saveBtn);
 
     resultEl.appendChild(actionsRow);
     return resultEl;

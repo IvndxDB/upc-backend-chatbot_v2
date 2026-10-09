@@ -133,20 +133,21 @@ class SupabaseService:
             logger.error(f'❌ Supabase log_search: {e}')
 
     def get_usage(self, sub):
-        """Return current month usage for a user."""
+        """Return current month usage and profile for a user."""
         if not self.available:
-            return {'count': 0, 'limit': 0, 'remaining': 9999}
+            return {'count': 0, 'limit': 0, 'remaining': 9999, 'allowed_stores': None}
 
         try:
             ym = self._year_month()
 
             user = _first(
                 self.client.table('addon_users')
-                .select('monthly_limit')
+                .select('monthly_limit, allowed_stores')
                 .eq('cognito_sub', sub)
                 .execute()
             )
             monthly_limit = user.get('monthly_limit') or 100
+            allowed_stores = user.get('allowed_stores')  # int[] or None
 
             usage = _first(
                 self.client.table('addon_usage')
@@ -161,8 +162,9 @@ class SupabaseService:
                 'count': count,
                 'limit': monthly_limit,
                 'remaining': max(0, monthly_limit - count),
+                'allowed_stores': allowed_stores,
             }
 
         except Exception as e:
             logger.error(f'❌ Supabase get_usage: {e}')
-            return {'count': 0, 'limit': 0, 'remaining': 9999}
+            return {'count': 0, 'limit': 0, 'remaining': 9999, 'allowed_stores': None}
